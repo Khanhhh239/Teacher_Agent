@@ -17,9 +17,15 @@ pip install -r requirements.txt
 ## Cấu hình API key
 
 ```bash
-export GEMINI_API_KEY=xxxx      # bắt buộc — lấy miễn phí tại https://aistudio.google.com/apikey
-export DEEPSEEK_API_KEY=xxxx    # tuỳ chọn — nếu có, dùng DeepSeek-V3 (rẻ hơn) cho bước cấu trúc hóa text thay vì Gemini
+export GEMINI_API_KEY=xxxx      # miễn phí, có giới hạn/ngày — https://aistudio.google.com/apikey
+export DEEPSEEK_API_KEY=xxxx    # tuỳ chọn — trả phí rất rẻ, không giới hạn/ngày, bảo mật hơn cho đề chưa công bố
+export LLM_PROVIDER=auto        # auto (mặc định) | gemini | deepseek — xem LLM_PROVIDERS.md
 ```
+
+Cần **ít nhất 1 trong 2 key** trên. Đặt cả hai + để `LLM_PROVIDER=auto` để pipeline tự động
+chuyển sang DeepSeek khi Gemini hết quota (429). Xem [`LLM_PROVIDERS.md`](LLM_PROVIDERS.md) để
+biết phân tích chi tiết quota Gemini free tier, rủi ro bảo mật dữ liệu, và vì sao nên dùng
+DeepSeek cho đề thi chưa công bố.
 
 ## Chạy
 

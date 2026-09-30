@@ -98,14 +98,28 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    if not os.environ.get("GEMINI_API_KEY"):
+    provider = os.environ.get("LLM_PROVIDER", "auto").lower()
+    has_gemini = bool(os.environ.get("GEMINI_API_KEY"))
+    has_deepseek = bool(os.environ.get("DEEPSEEK_API_KEY"))
+
+    if provider == "gemini" and not has_gemini:
+        print("[extract] LỖI: LLM_PROVIDER=gemini nhưng chưa đặt GEMINI_API_KEY.", file=sys.stderr)
+        sys.exit(1)
+    if provider == "deepseek" and not has_deepseek:
+        print("[extract] LỖI: LLM_PROVIDER=deepseek nhưng chưa đặt DEEPSEEK_API_KEY.", file=sys.stderr)
+        sys.exit(1)
+    if provider == "auto" and not has_gemini and not has_deepseek:
         print(
-            "[extract] LỖI: chưa đặt biến môi trường GEMINI_API_KEY.\n"
-            "  Lấy API key miễn phí tại https://aistudio.google.com/apikey rồi chạy:\n"
+            "[extract] LỖI: chưa đặt GEMINI_API_KEY hoặc DEEPSEEK_API_KEY.\n"
+            "  Gemini (miễn phí, có giới hạn/ngày): https://aistudio.google.com/apikey\n"
+            "  DeepSeek (trả phí rất rẻ, không giới hạn/ngày, bảo mật hơn cho đề chưa công bố):\n"
+            "  https://platform.deepseek.com/api_keys\n"
             "  export GEMINI_API_KEY=xxxx   (Linux/Mac/Git Bash)\n"
             "  $env:GEMINI_API_KEY='xxxx'   (PowerShell)",
             file=sys.stderr,
         )
         sys.exit(1)
+    if provider == "auto" and not has_gemini and has_deepseek:
+        print("[extract] Không có GEMINI_API_KEY — dùng DeepSeek cho toàn bộ pipeline.")
 
     run(args.input, args.out, skip_ole_ocr=args.skip_ole_ocr)

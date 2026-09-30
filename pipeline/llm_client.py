@@ -1,12 +1,27 @@
-"""Wrapper gọi Gemini (vision + text) và DeepSeek-V3 (text) cho pipeline trích xuất.
+"""Wrapper gọi LLM cho pipeline trích xuất — có fallback tự động giữa Gemini và DeepSeek.
 
-Thiết kế: Gemini dùng cho mọi bước cần Vision (OCR ảnh công thức, OCR trang PDF).
-DeepSeek-V3 dùng cho bước NER/cấu trúc hóa văn bản thuần (rẻ hơn Gemini cho text-only),
-nhưng nếu không có DEEPSEEK_API_KEY thì fallback dùng Gemini cho luôn bước này.
+Vì sao cần fallback (xem pipeline/LLM_PROVIDERS.md để biết chi tiết điều tra):
+- Gemini free tier CÓ giới hạn cứng theo ngày (RPD) — hết quota giữa chừng sẽ lỗi 429 và
+  KHÔNG tự phục hồi cho tới nửa đêm giờ Thái Bình Dương (Mỹ). Nếu giáo viên cần trích xuất
+  gấp mà quota đã hết, pipeline sẽ tự chuyển sang DeepSeek (nếu có DEEPSEEK_API_KEY) thay vì
+  dừng hẳn.
+- Free tier Gemini dùng dữ liệu để cải thiện model (Google có thể đọc lại nội dung đề thi).
+  Với đề thi CHƯA công bố (sắp thi thật), nên ưu tiên DeepSeek (tài khoản đã nạp tiền không
+  bị dùng dữ liệu để train mặc định) bằng cách đặt LLM_PROVIDER=deepseek.
+- DeepSeek không có free tier nhưng rất rẻ và từ 09/2026 model deepseek-flash đã hỗ trợ vision
+  (nhận ảnh) cùng giá với text — dùng được cho cả OCR ảnh lẫn cấu trúc hóa văn bản.
+
+Biến môi trường điều khiển:
+  LLM_PROVIDER = auto (mặc định) | gemini | deepseek
+    - auto: thử Gemini trước (free), tự fallback sang DeepSeek nếu Gemini lỗi quota/429
+      và có DEEPSEEK_API_KEY. Không có DEEPSEEK_API_KEY thì chỉ dùng Gemini.
+    - gemini: chỉ dùng Gemini, không fallback (dừng hẳn nếu hết quota).
+    - deepseek: chỉ dùng DeepSeek (khuyến nghị khi đề thi có tính bảo mật).
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import time
@@ -47,84 +62,6 @@ Nội dung đề thi cần cấu trúc hóa:
 
 Chỉ trả về JSON hợp lệ, không markdown, không code fence."""
 
-
-def _extract_json(text: str) -> dict:
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-    return json.loads(text)
-
-
-def structure_exam_text(raw_text: str) -> dict:
-    """Gọi LLM (ưu tiên DeepSeek, fallback Gemini) để cấu trúc hóa văn bản đề thi thô
-    thành JSON theo schema ExtractedExam."""
-    if os.environ.get("DEEPSEEK_API_KEY"):
-        return _structure_with_deepseek(raw_text)
-    return _structure_with_gemini_text(raw_text)
-
-
-def _structure_with_deepseek(raw_text: str) -> dict:
-    import requests
-
-    resp = requests.post(
-        "https://api.deepseek.com/chat/completions",
-        headers={"Authorization": f"Bearer {os.environ['DEEPSEEK_API_KEY']}"},
-        json={
-            "model": "deepseek-chat",
-            "messages": [
-                {"role": "user", "content": STRUCTURE_PROMPT.format(content=raw_text)}
-            ],
-            "temperature": 0,
-            "response_format": {"type": "json_object"},
-        },
-        timeout=120,
-    )
-    resp.raise_for_status()
-    content = resp.json()["choices"][0]["message"]["content"]
-    return _extract_json(content)
-
-
-def _structure_with_gemini_text(raw_text: str) -> dict:
-    import google.generativeai as genai
-
-    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-    model = genai.GenerativeModel("gemini-2.5-flash")
-    resp = model.generate_content(
-        STRUCTURE_PROMPT.format(content=raw_text),
-        generation_config={"temperature": 0, "response_mime_type": "application/json"},
-    )
-    return _extract_json(resp.text)
-
-
-def ocr_equation_image(image_path: str) -> str:
-    """Gửi 1 ảnh công thức (crop nhỏ) tới Gemini vision, trả về chuỗi LaTeX (không có $)."""
-    import google.generativeai as genai
-    from PIL import Image
-
-    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-    model = genai.GenerativeModel("gemini-2.5-flash-lite")
-    img = Image.open(image_path)
-
-    for attempt in range(3):
-        try:
-            resp = model.generate_content(
-                [
-                    "Đây là ảnh 1 công thức toán học. Trả về DUY NHẤT chuỗi LaTeX tương ứng, "
-                    "không giải thích, không bọc trong $ hay code fence.",
-                    img,
-                ],
-                generation_config={"temperature": 0},
-            )
-            return resp.text.strip().strip("$")
-        except Exception:
-            if attempt == 2:
-                raise
-            time.sleep(2**attempt)
-    return ""
-
-
 PDF_PAGE_PROMPT = """Bạn là trợ lý số hóa đề thi tiếng Việt. Đọc ảnh 1 trang đề thi đính kèm (chữ tiếng Việt có dấu, công thức toán, hình vẽ minh họa) và trả về DUY NHẤT 1 JSON theo schema:
 
 {
@@ -157,16 +94,188 @@ Quy tắc:
 Chỉ trả JSON hợp lệ, không markdown, không code fence."""
 
 
-def ocr_pdf_page_to_json(image_path: str) -> dict:
-    """Gửi 1 trang PDF (ảnh full trang) tới Gemini vision, yêu cầu trả JSON cấu trúc hóa
-    trực tiếp câu hỏi + bbox hình vẽ trên trang đó."""
+class QuotaExhaustedError(Exception):
+    """Gemini free tier hết quota (429) — pipeline sẽ bắt lỗi này để fallback sang DeepSeek."""
+
+
+def _extract_json(text: str) -> dict:
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+    return json.loads(text)
+
+
+def _provider() -> str:
+    return os.environ.get("LLM_PROVIDER", "auto").lower()
+
+
+def _is_quota_error(e: Exception) -> bool:
+    msg = str(e).lower()
+    return "429" in msg or "quota" in msg or "resource_exhausted" in msg or "resourceexhausted" in msg
+
+
+# ---------------------------------------------------------------------------
+# Cấu trúc hóa văn bản thuần (nhánh A/B: docx đã có text + LaTeX)
+# ---------------------------------------------------------------------------
+
+
+def structure_exam_text(raw_text: str) -> dict:
+    provider = _provider()
+
+    if provider == "deepseek":
+        return _structure_with_deepseek(raw_text)
+    if provider == "gemini":
+        return _structure_with_gemini_text(raw_text)
+
+    # auto: ưu tiên Gemini (free) trước, fallback DeepSeek nếu lỗi quota
+    try:
+        return _structure_with_gemini_text(raw_text)
+    except Exception as e:  # noqa: BLE001
+        if os.environ.get("DEEPSEEK_API_KEY") and (_is_quota_error(e) or not os.environ.get("GEMINI_API_KEY")):
+            print(f"[llm_client] Gemini lỗi ({e}) — fallback sang DeepSeek.")
+            return _structure_with_deepseek(raw_text)
+        raise
+
+
+def _structure_with_deepseek(raw_text: str) -> dict:
+    import requests
+
+    resp = requests.post(
+        "https://api.deepseek.com/chat/completions",
+        headers={"Authorization": f"Bearer {os.environ['DEEPSEEK_API_KEY']}"},
+        json={
+            "model": "deepseek-flash",
+            "messages": [
+                {"role": "user", "content": STRUCTURE_PROMPT.format(content=raw_text)}
+            ],
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+        },
+        timeout=120,
+    )
+    resp.raise_for_status()
+    content = resp.json()["choices"][0]["message"]["content"]
+    return _extract_json(content)
+
+
+def _structure_with_gemini_text(raw_text: str) -> dict:
+    import google.generativeai as genai
+
+    if not os.environ.get("GEMINI_API_KEY"):
+        raise RuntimeError("Chưa đặt GEMINI_API_KEY")
+
+    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+    model = genai.GenerativeModel("gemini-2.5-flash")
+    try:
+        resp = model.generate_content(
+            STRUCTURE_PROMPT.format(content=raw_text),
+            generation_config={"temperature": 0, "response_mime_type": "application/json"},
+        )
+    except Exception as e:  # noqa: BLE001
+        if _is_quota_error(e):
+            raise QuotaExhaustedError(str(e)) from e
+        raise
+    return _extract_json(resp.text)
+
+
+# ---------------------------------------------------------------------------
+# OCR ảnh công thức đơn lẻ (nhánh B: WMF/OLE MathType cũ đã convert sang PNG)
+# ---------------------------------------------------------------------------
+
+
+def ocr_equation_image(image_path: str) -> str:
+    provider = _provider()
+
+    if provider == "deepseek":
+        return _ocr_equation_deepseek(image_path)
+    if provider == "gemini":
+        return _ocr_equation_gemini(image_path)
+
+    try:
+        return _ocr_equation_gemini(image_path)
+    except Exception as e:  # noqa: BLE001
+        if os.environ.get("DEEPSEEK_API_KEY") and (_is_quota_error(e) or not os.environ.get("GEMINI_API_KEY")):
+            print(f"[llm_client] Gemini lỗi ({e}) khi OCR công thức — fallback sang DeepSeek.")
+            return _ocr_equation_deepseek(image_path)
+        raise
+
+
+def _ocr_equation_gemini(image_path: str) -> str:
     import google.generativeai as genai
     from PIL import Image
+
+    if not os.environ.get("GEMINI_API_KEY"):
+        raise RuntimeError("Chưa đặt GEMINI_API_KEY")
+
+    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+    model = genai.GenerativeModel("gemini-2.5-flash-lite")
+    img = Image.open(image_path)
+
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            resp = model.generate_content(
+                [
+                    "Đây là ảnh 1 công thức toán học. Trả về DUY NHẤT chuỗi LaTeX tương ứng, "
+                    "không giải thích, không bọc trong $ hay code fence.",
+                    img,
+                ],
+                generation_config={"temperature": 0},
+            )
+            return resp.text.strip().strip("$")
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            if _is_quota_error(e):
+                raise QuotaExhaustedError(str(e)) from e
+            time.sleep(2**attempt)
+    raise last_err  # type: ignore[misc]
+
+
+def _ocr_equation_deepseek(image_path: str) -> str:
+    text = _deepseek_vision_call(
+        image_path,
+        "Đây là ảnh 1 công thức toán học. Trả về DUY NHẤT chuỗi LaTeX tương ứng, "
+        "không giải thích, không bọc trong $ hay code fence.",
+    )
+    return text.strip().strip("$")
+
+
+# ---------------------------------------------------------------------------
+# OCR + cấu trúc hóa 1 trang PDF (nhánh C: PDF ảnh thuần)
+# ---------------------------------------------------------------------------
+
+
+def ocr_pdf_page_to_json(image_path: str) -> dict:
+    provider = _provider()
+
+    if provider == "deepseek":
+        return _ocr_pdf_page_deepseek(image_path)
+    if provider == "gemini":
+        return _ocr_pdf_page_gemini(image_path)
+
+    try:
+        return _ocr_pdf_page_gemini(image_path)
+    except Exception as e:  # noqa: BLE001
+        if os.environ.get("DEEPSEEK_API_KEY") and (_is_quota_error(e) or not os.environ.get("GEMINI_API_KEY")):
+            print(f"[llm_client] Gemini lỗi ({e}) khi OCR trang PDF — fallback sang DeepSeek.")
+            return _ocr_pdf_page_deepseek(image_path)
+        raise
+
+
+def _ocr_pdf_page_gemini(image_path: str) -> dict:
+    import google.generativeai as genai
+    from PIL import Image
+
+    if not os.environ.get("GEMINI_API_KEY"):
+        raise RuntimeError("Chưa đặt GEMINI_API_KEY")
 
     genai.configure(api_key=os.environ["GEMINI_API_KEY"])
     model = genai.GenerativeModel("gemini-2.5-flash")
     img = Image.open(image_path)
 
+    last_err: Exception | None = None
     for attempt in range(3):
         try:
             resp = model.generate_content(
@@ -174,8 +283,48 @@ def ocr_pdf_page_to_json(image_path: str) -> dict:
                 generation_config={"temperature": 0, "response_mime_type": "application/json"},
             )
             return _extract_json(resp.text)
-        except Exception:
-            if attempt == 2:
-                raise
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            if _is_quota_error(e):
+                raise QuotaExhaustedError(str(e)) from e
             time.sleep(2**attempt)
-    return {"questions": [], "figures": []}
+    raise last_err  # type: ignore[misc]
+
+
+def _ocr_pdf_page_deepseek(image_path: str) -> dict:
+    text = _deepseek_vision_call(image_path, PDF_PAGE_PROMPT, json_mode=True)
+    return _extract_json(text)
+
+
+def _deepseek_vision_call(image_path: str, prompt: str, json_mode: bool = False) -> str:
+    """Gọi deepseek-flash (hỗ trợ vision từ 09/2026) theo format OpenAI-compatible."""
+    import requests
+
+    with open(image_path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+
+    ext = os.path.splitext(image_path)[1].lstrip(".") or "png"
+    body = {
+        "model": "deepseek-flash",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/{ext};base64,{b64}"}},
+                ],
+            }
+        ],
+        "temperature": 0,
+    }
+    if json_mode:
+        body["response_format"] = {"type": "json_object"}
+
+    resp = requests.post(
+        "https://api.deepseek.com/chat/completions",
+        headers={"Authorization": f"Bearer {os.environ['DEEPSEEK_API_KEY']}"},
+        json=body,
+        timeout=120,
+    )
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"]
