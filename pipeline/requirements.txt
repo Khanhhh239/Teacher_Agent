@@ -3,4 +3,4 @@ python-docx
 PyMuPDF
 Pillow
 requests
-google-generativeai
+google-genai
