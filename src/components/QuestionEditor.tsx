@@ -1,11 +1,13 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { LatexText } from "@/components/Latex";
 import type { Question, QuestionOption, SubStatement } from "@/types/exam";
 
 export function QuestionEditor({ question }: { question: Question }) {
+  const router = useRouter();
   const [q, setQ] = useState(question);
   const [editing, setEditing] = useState(question.needs_review);
   const [saving, setSaving] = useState(false);
@@ -29,6 +31,8 @@ export function QuestionEditor({ question }: { question: Question }) {
     setSaving(false);
     setEditing(false);
     setQ({ ...q, needs_review: false });
+    // Đồng bộ lại số "câu chưa duyệt" tính ở Server Component cha (ExamStatusControls)
+    router.refresh();
   }
 
   function updateOption(idx: number, patch: Partial<QuestionOption>) {
