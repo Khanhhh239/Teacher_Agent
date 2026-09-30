@@ -45,3 +45,6 @@ next-env.d.ts
 pipeline/output/
 pipeline/__pycache__/
 pipeline/*.pyc
+
+.vercel
+.token-optimizer/
