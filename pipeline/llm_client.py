@@ -173,10 +173,10 @@ def structure_exam_text(raw_text: str) -> dict:
     if provider == "deepseek":
         return _structure_with_deepseek(raw_text)
     if provider == "gemini":
-        return _extract_json(_call_gemini_with_retry(GEMINI_MODEL_MAIN, STRUCTURE_PROMPT.format(content=raw_text), json_mode=True))
+        return _extract_json(_call_gemini_with_retry(GEMINI_MODEL_MAIN, STRUCTURE_PROMPT.replace("{content}", raw_text), json_mode=True))
 
     try:
-        return _extract_json(_call_gemini_with_retry(GEMINI_MODEL_MAIN, STRUCTURE_PROMPT.format(content=raw_text), json_mode=True))
+        return _extract_json(_call_gemini_with_retry(GEMINI_MODEL_MAIN, STRUCTURE_PROMPT.replace("{content}", raw_text), json_mode=True))
     except Exception as e:  # noqa: BLE001
         if os.environ.get("DEEPSEEK_API_KEY") and (_is_transient_error(e) or not os.environ.get("GEMINI_API_KEY")):
             print(f"[llm_client] Gemini lỗi ({e}) — fallback sang DeepSeek.")
@@ -193,7 +193,7 @@ def _structure_with_deepseek(raw_text: str) -> dict:
         json={
             "model": "deepseek-flash",
             "messages": [
-                {"role": "user", "content": STRUCTURE_PROMPT.format(content=raw_text)}
+                {"role": "user", "content": STRUCTURE_PROMPT.replace("{content}", raw_text)}
             ],
             "temperature": 0,
             "response_format": {"type": "json_object"},

@@ -63,15 +63,26 @@ def run(input_path: str, output_dir: str, skip_ole_ocr: bool = False):
         print(f"[extract] Định dạng không hỗ trợ: {ext}", file=sys.stderr)
         sys.exit(1)
 
+    def _set_default(d: dict, key: str, default):
+        # LLM đôi khi trả JSON null tường minh (không chỉ thiếu key) cho các trường không
+        # áp dụng — DB không cho NULL ở cột options/sub_statements nên phải ép giá trị ở
+        # đây; dict.setdefault() không đủ vì key đã tồn tại với giá trị None.
+        if d.get(key) is None:
+            d[key] = default
+
     for q in structured.get("questions", []):
-        q.setdefault("image_url", None)
-        q.setdefault("raw_ocr_notes", None)
-        q.setdefault("options", [])
-        q.setdefault("sub_statements", [])
-        q.setdefault("correct_answer", None)
-        q.setdefault("short_answer_normalized", None)
-        q.setdefault("score_rule", "standard")
-        q.setdefault("max_score", 0.25)
+        _set_default(q, "image_url", None)
+        _set_default(q, "raw_ocr_notes", None)
+        _set_default(q, "options", [])
+        _set_default(q, "sub_statements", [])
+        _set_default(q, "correct_answer", None)
+        _set_default(q, "short_answer_normalized", None)
+        _set_default(q, "score_rule", "standard")
+        _set_default(q, "max_score", 0.25)
+        # sub_statements[].answer=None (chưa xác định đáp án) -> ép về False tạm;
+        # needs_review=True ở phía DB sẽ nhắc giáo viên phải xác nhận lại giá trị thật.
+        for s in q["sub_statements"]:
+            _set_default(s, "answer", False)
 
     out_json = Path(output_dir) / "exam.json"
     out_json.write_text(json.dumps(structured, ensure_ascii=False, indent=2), encoding="utf-8")

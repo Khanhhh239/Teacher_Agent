@@ -1,3 +1,4 @@
 {"kind":"read","anchor":"C:/Users/Admin/Downloads/edu/src/app/page.tsx","sessionId":"710587a9-8f14-46ed-8080-0437389fc872","tokens":769,"at":1790765114521}
 {"kind":"read","anchor":"C:/Users/Admin/Downloads/edu/.gitignore","sessionId":"710587a9-8f14-46ed-8080-0437389fc872","tokens":120,"at":1790765782962}
 {"kind":"substitute","anchor":"C:/Users/Admin/Downloads/edu/pipeline/llm_client.py","tokens":137,"findings":0,"symbols":6,"bytesAvoided":7232,"at":1790772303044}
+{"kind":"read","anchor":"C:/Users/Admin/AppData/Local/Temp/claude/C--Users-Admin-Downloads-graphRAG/710587a9-8f14-46ed-8080-0437389fc872/tasks/bsxdepmrn.output","sessionId":"710587a9-8f14-46ed-8080-0437389fc872","tokens":165,"at":1790775243362}
