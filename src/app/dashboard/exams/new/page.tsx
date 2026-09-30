@@ -1,116 +1,71 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
-import type { ExtractedExam } from "@/types/exam";
 
 export default function NewExamPage() {
   const router = useRouter();
-  const [title, setTitle] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [dragOver, setDragOver] = useState(false);
   const [subject, setSubject] = useState("");
   const [duration, setDuration] = useState(90);
-  const [jsonFile, setJsonFile] = useState<File | null>(null);
-  const [imageFiles, setImageFiles] = useState<FileList | null>(null);
   const [busy, setBusy] = useState(false);
-  const [log, setLog] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
 
-  function appendLog(line: string) {
-    setLog((prev) => [...prev, line]);
+  function pickFile(f: File | null) {
+    if (!f) return;
+    const ext = f.name.split(".").pop()?.toLowerCase();
+    if (ext !== "docx" && ext !== "pdf") {
+      setError("Chỉ chấp nhận file .docx hoặc .pdf");
+      return;
+    }
+    setError(null);
+    setFile(f);
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!file) {
+      setError("Vui lòng chọn file đề thi (.docx hoặc .pdf)");
+      return;
+    }
     setBusy(true);
     setError(null);
-    setLog([]);
+    setWarnings([]);
 
     try {
-      const supabase = createClient();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) throw new Error("Chưa đăng nhập");
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("duration_minutes", String(duration));
 
-      let extracted: ExtractedExam | null = null;
-      if (jsonFile) {
-        appendLog("Đang đọc file JSON đã trích xuất...");
-        extracted = JSON.parse(await jsonFile.text());
+      const res = await fetch("/api/exams/extract-upload", { method: "POST", body: formData });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error ?? "Có lỗi xảy ra khi xử lý file");
+        setBusy(false);
+        return;
       }
 
-      appendLog("Đang tạo đề thi...");
-      const { data: exam, error: examError } = await supabase
-        .from("exams")
-        .insert({
-          teacher_id: user.id,
-          title: title || extracted?.title || "Đề thi chưa đặt tên",
-          subject: subject || extracted?.subject || "",
-          duration_minutes: duration,
-          status: extracted ? "reviewing" : "draft",
-          source_branch: extracted?.source_branch ?? "MANUAL",
-        })
-        .select()
-        .single();
-      if (examError) throw examError;
-
-      if (extracted) {
-        // Map tên file ảnh (đường dẫn tương đối trong JSON) -> File object đã chọn
-        const imageMap = new Map<string, File>();
-        if (imageFiles) {
-          for (const f of Array.from(imageFiles)) {
-            imageMap.set(f.name, f);
-            imageMap.set(`images/${f.name}`, f);
-          }
-        }
-
-        appendLog(`Đang import ${extracted.questions.length} câu hỏi...`);
-        for (let i = 0; i < extracted.questions.length; i++) {
-          const q = extracted.questions[i];
-          let imageUrl: string | null = null;
-
-          if (q.image_url) {
-            const localFile = imageMap.get(q.image_url);
-            if (localFile) {
-              const path = `${exam.id}/${crypto.randomUUID()}-${localFile.name}`;
-              const { error: uploadError } = await supabase.storage
-                .from("exam-images")
-                .upload(path, localFile);
-              if (uploadError) throw uploadError;
-              const { data: pub } = supabase.storage.from("exam-images").getPublicUrl(path);
-              imageUrl = pub.publicUrl;
-            } else if (q.image_url.startsWith("http")) {
-              imageUrl = q.image_url;
-            }
-          }
-
-          const { error: qError } = await supabase.from("questions").insert({
-            exam_id: exam.id,
-            order_index: i,
-            type: q.type,
-            content_latex: q.content_latex,
-            image_url: imageUrl,
-            options: q.options,
-            sub_statements: q.sub_statements,
-            correct_answer: q.correct_answer,
-            short_answer_normalized: q.short_answer_normalized,
-            score_rule: q.score_rule,
-            max_score: q.max_score,
-            raw_ocr_notes: q.raw_ocr_notes,
-            needs_review: true,
-          });
-          if (qError) throw qError;
-          appendLog(`  Câu ${i + 1}/${extracted.questions.length} OK`);
-        }
-      }
-
-      appendLog("Hoàn tất! Đang chuyển tới trang duyệt câu hỏi...");
-      router.push(`/dashboard/exams/${exam.id}`);
+      if (data.warnings?.length) setWarnings(data.warnings);
+      router.push(`/dashboard/exams/${data.exam_id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-    } finally {
       setBusy(false);
     }
+  }
+
+  if (busy) {
+    return (
+      <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4">
+        <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-slate-900" />
+        <p className="text-slate-600">
+          Đang đọc và trích xuất đề thi (30–60 giây tuỳ độ dài file)...
+        </p>
+      </div>
+    );
   }
 
   return (
@@ -118,22 +73,59 @@ export default function NewExamPage() {
       <h1 className="mb-4 text-lg font-semibold">Tạo đề thi mới</h1>
 
       <form onSubmit={handleSubmit} className="space-y-4 rounded-lg border bg-white p-5">
-        <div>
-          <label className="mb-1 block text-sm font-medium">Tên đề thi</label>
+        <div
+          onClick={() => fileInputRef.current?.click()}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragOver(true);
+          }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragOver(false);
+            pickFile(e.dataTransfer.files?.[0] ?? null);
+          }}
+          className={`flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-10 text-center transition-colors ${
+            dragOver ? "border-slate-900 bg-slate-50" : "border-slate-300 hover:border-slate-400"
+          }`}
+        >
+          <svg
+            className="h-10 w-10 text-slate-400"
+            fill="none"
+            viewBox="0 0 24 24"
+            strokeWidth={1.5}
+            stroke="currentColor"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M12 16.5V9.75m0 0 3 3m-3-3-3 3M6.75 19.5a4.5 4.5 0 0 1-1.41-8.775 5.25 5.25 0 0 1 10.233-2.33 3 3 0 0 1 3.758 3.848A3.752 3.752 0 0 1 18 19.5H6.75Z"
+            />
+          </svg>
+          {file ? (
+            <p className="font-medium text-slate-900">{file.name}</p>
+          ) : (
+            <>
+              <p className="font-medium text-slate-700">Kéo thả file vào đây, hoặc bấm để chọn</p>
+              <p className="text-sm text-slate-500">Hỗ trợ file .docx hoặc .pdf (đề thi + đáp án)</p>
+            </>
+          )}
           <input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Ví dụ: Đề thi thử THPT 2026 - Mã 0101"
-            className="w-full rounded-md border px-3 py-2 text-sm"
+            ref={fileInputRef}
+            type="file"
+            accept=".docx,.pdf"
+            className="hidden"
+            onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
           />
         </div>
 
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="mb-1 block text-sm font-medium">Môn học</label>
+            <label className="mb-1 block text-sm font-medium">Môn học (tuỳ chọn)</label>
             <input
               value={subject}
               onChange={(e) => setSubject(e.target.value)}
+              placeholder="Hệ thống sẽ tự nhận diện nếu để trống"
               className="w-full rounded-md border px-3 py-2 text-sm"
             />
           </div>
@@ -148,46 +140,21 @@ export default function NewExamPage() {
           </div>
         </div>
 
-        <hr />
-
-        <div>
-          <p className="mb-2 text-sm font-medium">
-            Import từ pipeline trích xuất (tuỳ chọn) — chạy{" "}
-            <code className="rounded bg-slate-100 px-1">pipeline/extract.py</code> trước để có
-            file JSON + thư mục ảnh.
-          </p>
-          <label className="mb-1 block text-sm">File JSON đã trích xuất</label>
-          <input
-            type="file"
-            accept="application/json"
-            onChange={(e) => setJsonFile(e.target.files?.[0] ?? null)}
-            className="mb-3 block w-full text-sm"
-          />
-          <label className="mb-1 block text-sm">Ảnh minh họa (chọn tất cả file trong thư mục images/)</label>
-          <input
-            type="file"
-            multiple
-            accept="image/*"
-            onChange={(e) => setImageFiles(e.target.files)}
-            className="block w-full text-sm"
-          />
-        </div>
-
         {error && <p className="text-sm text-red-600">{error}</p>}
-        {log.length > 0 && (
-          <div className="max-h-40 overflow-y-auto rounded-md bg-slate-50 p-2 text-xs text-slate-600">
-            {log.map((l, i) => (
-              <p key={i}>{l}</p>
+        {warnings.length > 0 && (
+          <div className="rounded-md bg-amber-50 p-3 text-xs text-amber-800">
+            {warnings.map((w, i) => (
+              <p key={i}>⚠ {w}</p>
             ))}
           </div>
         )}
 
         <button
           type="submit"
-          disabled={busy}
+          disabled={!file}
           className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
         >
-          {busy ? "Đang xử lý..." : "Tạo đề thi"}
+          Tải lên & trích xuất
         </button>
       </form>
     </div>
