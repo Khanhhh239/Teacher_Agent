@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { detectDocxBranch, extractDocx } from "@/lib/extraction/docxExtract";
-import { structureExamText, extractPdfWithVision } from "@/lib/extraction/llmClient";
+import { structureExamText, extractPdfPages } from "@/lib/extraction/llmClient";
 import { normalizeExtractedExam } from "@/lib/extraction/normalize";
 
 export const runtime = "nodejs";
@@ -31,21 +31,22 @@ export async function POST(request: Request) {
 
   let extracted;
   let sourceBranch: string;
-  let docxImages: Map<string, Buffer> | null = null;
+  let localImages: Map<string, Buffer> | null = null;
   const warnings: string[] = [];
 
   try {
     if (ext === "docx") {
       sourceBranch = await detectDocxBranch(buffer);
       const result = await extractDocx(buffer);
-      docxImages = result.images;
+      localImages = result.images;
       warnings.push(...result.warnings);
       const structured = await structureExamText(result.text);
       extracted = normalizeExtractedExam({ ...structured, source_branch: sourceBranch });
     } else if (ext === "pdf") {
       sourceBranch = "PDF_IMAGE_ONLY";
-      const structured = await extractPdfWithVision(buffer);
-      extracted = normalizeExtractedExam({ ...structured, source_branch: sourceBranch });
+      const { extracted: pdfExtracted, images } = await extractPdfPages(buffer);
+      localImages = images;
+      extracted = normalizeExtractedExam({ ...pdfExtracted, source_branch: sourceBranch });
     } else {
       return NextResponse.json({ error: "Chỉ hỗ trợ file .docx hoặc .pdf" }, { status: 400 });
     }
@@ -76,8 +77,8 @@ export async function POST(request: Request) {
     const imageUrls: string[] = [];
 
     for (const localName of q.image_urls) {
-      if (!docxImages?.has(localName)) continue;
-      const imgBuffer = docxImages.get(localName)!;
+      if (!localImages?.has(localName)) continue;
+      const imgBuffer = localImages.get(localName)!;
       const path = `${exam.id}/${crypto.randomUUID()}-${localName}`;
       const { error: uploadError } = await supabase.storage.from("exam-images").upload(path, imgBuffer, {
         contentType: `image/${localName.split(".").pop()}`,

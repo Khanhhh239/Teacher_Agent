@@ -53,24 +53,27 @@ Xử lý marker trong văn bản (BẮT BUỘC xóa hết các marker này khỏ
 
 Chỉ trả về JSON hợp lệ, không markdown, không code fence.`;
 
-const PDF_PROMPT = `Bạn là trợ lý số hóa đề thi tiếng Việt. Đọc toàn bộ file PDF đính kèm (đề thi, có thể nhiều trang, chữ tiếng Việt có dấu, công thức toán, hình vẽ minh họa) và trả về DUY NHẤT 1 JSON theo schema:
+const PDF_PAGE_PROMPT = `Bạn là trợ lý số hóa đề thi tiếng Việt. Đọc ảnh 1 TRANG đề thi đính kèm (chữ tiếng Việt có dấu, công thức toán, hình vẽ minh họa) và trả về DUY NHẤT 1 JSON theo schema:
 
 {
-  "title": "tên đề thi",
-  "subject": "môn học",
+  "title": "tên đề thi (chỉ điền nếu trang này là trang đầu có tiêu đề, còn lại để null)",
+  "subject": "môn học (chỉ điền nếu trang này là trang đầu, còn lại để null)",
   "questions": [
     {
       "type": "multiple_choice" | "true_false_group" | "short_answer",
       "content_latex": "nội dung câu hỏi, công thức toán bọc trong $...$",
-      "image_urls": [],
+      "figure_refs": ["fig1"],
       "options": [{"key": "A", "text_latex": "..."}],
       "sub_statements": [{"key": "a", "text_latex": "...", "answer": true}],
-      "correct_answer": "A hoặc null nếu trang PDF không có đáp án kèm theo",
+      "correct_answer": "A hoặc null nếu trang này không có đáp án kèm theo",
       "short_answer_normalized": "đáp án hoặc null",
       "score_rule": "standard" | "thpt2025_truefalse_partial",
       "max_score": 0.25,
-      "raw_ocr_notes": "ghi chú nếu câu này có hình vẽ minh họa mà bạn không thể mô tả bằng text (vd: 'Câu này có hình vẽ lăng trụ ABC.A'B'C' kèm theo, giáo viên cần tự chèn ảnh minh họa'), hoặc null"
+      "raw_ocr_notes": null
     }
+  ],
+  "figures": [
+    {"id": "fig1", "bbox_1000": [x0, y0, x1, y1]}
   ]
 }
 
@@ -78,9 +81,11 @@ Quy tắc:
 - "multiple_choice": 4 lựa chọn A/B/C/D. max_score 0.25, score_rule "standard".
 - "true_false_group": 4 mệnh đề con a/b/c/d. max_score 1.0, score_rule "thpt2025_truefalse_partial".
 - "short_answer": điền giá trị ngắn. max_score 0.5, score_rule "standard".
-- image_urls luôn để mảng rỗng [] (hệ thống chưa tự cắt ảnh từ PDF) — nhưng PHẢI ghi chú vào raw_ocr_notes nếu câu có hình vẽ kèm theo để giáo viên biết cần tự thêm ảnh.
-- Nếu có đáp án/lời giải trong PDF (một số đề có kèm đáp án ở cuối), dùng để điền đáp án đúng. Nếu không, để null, TUYỆT ĐỐI không bịa.
-- Nếu đề bài có bảng số liệu, trình bày bằng cú pháp Markdown table trong content_latex (vd: "| Nhóm | [0;40) |\n| --- | --- |\n| Tần số | 11 |"). TUYỆT ĐỐI KHÔNG dùng \\begin{tabular}...\\end{tabular} — hệ thống không render được bảng LaTeX.
+- "figures": liệt kê MỌI hình vẽ/đồ thị/sơ đồ minh họa xuất hiện trên trang (hình học không gian, đồ thị hàm số, sơ đồ, bảng vẽ tay...) — KHÔNG liệt kê icon trang trí hay logo. "bbox_1000" là toạ độ khung hình đó [x0,y0,x1,y1], chuẩn hoá theo thang 0-1000 trên cả 2 trục, (0,0) là góc trên-trái trang, (1000,1000) là góc dưới-phải trang. Khung phải ôm sát đúng hình vẽ, không lấy dư vùng chữ xung quanh.
+- "figure_refs": mảng id các hình (từ "figures") thuộc về câu hỏi này, theo đúng thứ tự xuất hiện. Một câu có thể có 0, 1 hoặc nhiều hình. Để mảng rỗng [] nếu câu không có hình.
+- Nếu có đáp án/lời giải trên trang này, dùng để điền đáp án đúng. Nếu không, để null, TUYỆT ĐỐI không bịa.
+- Nếu trang có bảng số liệu, trình bày bằng cú pháp Markdown table trong content_latex (vd: "| Nhóm | [0;40) |\n| --- | --- |\n| Tần số | 11 |"). TUYỆT ĐỐI KHÔNG dùng \\begin{tabular}...\\end{tabular} — hệ thống không render được bảng LaTeX.
+- Nếu 1 câu hỏi bắt đầu ở trang trước và tiếp tục ở trang này (bị cắt trang), chỉ trả phần thuộc trang này, thêm tiền tố "[TIẾP TRANG TRƯỚC] " vào đầu content_latex.
 
 Chỉ trả JSON hợp lệ, không markdown, không code fence.`;
 
@@ -229,9 +234,9 @@ async function callGeminiText(prompt: string): Promise<string> {
   return callGeminiRaw(GEMINI_MODEL_TEXT, [{ text: prompt }]);
 }
 
-async function callGeminiWithPdf(pdfBase64: string, prompt: string): Promise<string> {
+async function callGeminiWithImage(imageBase64: string, prompt: string): Promise<string> {
   return callGeminiRaw(GEMINI_MODEL_VISION, [
-    { inline_data: { mime_type: "application/pdf", data: pdfBase64 } },
+    { inline_data: { mime_type: "image/png", data: imageBase64 } },
     { text: prompt },
   ]);
 }
@@ -253,10 +258,6 @@ async function callDeepseekText(prompt: string): Promise<string> {
   const data = (await res.json()) as any; // eslint-disable-line @typescript-eslint/no-explicit-any
   if (!res.ok) throw new Error(`DeepSeek lỗi ${res.status}: ${JSON.stringify(data).slice(0, 300)}`);
   return data.choices[0].message.content;
-}
-
-async function callDeepseekWithPdfAsImages(_pdfBase64: string): Promise<never> {
-  throw new Error("DeepSeek chưa hỗ trợ nhận file PDF trực tiếp trong pipeline này — dùng Gemini cho nhánh PDF.");
 }
 
 function provider(): "auto" | "gemini" | "deepseek" {
@@ -282,20 +283,78 @@ export async function structureExamText(rawText: string): Promise<ExtractedExam>
   }
 }
 
-export async function extractPdfWithVision(pdfBuffer: Buffer): Promise<ExtractedExam> {
-  const p = provider();
-  if (p === "deepseek") return callDeepseekWithPdfAsImages(pdfBuffer.toString("base64"));
+interface PdfPageResult {
+  title: string | null;
+  subject: string | null;
+  questions: Array<Record<string, unknown> & { figure_refs?: string[] }>;
+  figures: Array<{ id: string; bbox_1000: [number, number, number, number] }>;
+}
 
-  const base64 = pdfBuffer.toString("base64");
-  try {
-    return extractJson(await callGeminiWithPdf(base64, PDF_PROMPT)) as ExtractedExam;
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    throw new Error(
-      `Không xử lý được file PDF bằng Gemini vision (${msg}). ` +
-        (process.env.DEEPSEEK_API_KEY
-          ? "DeepSeek hiện chưa hỗ trợ trong pipeline này cho nhánh PDF."
-          : "Thử thêm GEMINI_API_KEY hoặc thử lại sau vài phút nếu đây là lỗi quá tải tạm thời.")
-    );
+async function ocrPdfPage(pagePngBase64: string): Promise<PdfPageResult> {
+  if (provider() === "deepseek") {
+    throw new Error("DeepSeek chưa hỗ trợ nhận ảnh trong pipeline này — dùng Gemini cho nhánh PDF.");
   }
+  const text = await callGeminiWithImage(pagePngBase64, PDF_PAGE_PROMPT);
+  return extractJson(text) as PdfPageResult;
+}
+
+/**
+ * Xử lý PDF theo từng trang: render trang -> ảnh PNG (pdfRender.ts) -> Gemini vision đọc
+ * nội dung + xác định bbox hình vẽ -> cắt ảnh bằng sharp -> gộp lại thành 1 ExtractedExam
+ * với image_urls trỏ tới tên file cục bộ (giống hệt quy ước của nhánh docx, extract-upload
+ * route sẽ upload các ảnh này lên Storage theo cùng 1 logic cho cả 2 nhánh).
+ */
+export async function extractPdfPages(
+  pdfBuffer: Buffer
+): Promise<{ extracted: ExtractedExam; images: Map<string, Buffer> }> {
+  const { renderPdfPages } = await import("./pdfRender");
+  const sharp = (await import("sharp")).default;
+
+  const pagePngs = renderPdfPages(pdfBuffer, 200);
+  const images = new Map<string, Buffer>();
+  const allQuestions: ExtractedExam["questions"] = [];
+  let title: string | null = null;
+  let subject: string | null = null;
+
+  for (let pageIndex = 0; pageIndex < pagePngs.length; pageIndex++) {
+    const pagePng = pagePngs[pageIndex];
+    const { width, height } = await sharp(pagePng).metadata();
+
+    const result = await ocrPdfPage(pagePng.toString("base64"));
+    if (pageIndex === 0) {
+      title = result.title ?? title;
+      subject = result.subject ?? subject;
+    }
+
+    const figureFilenames = new Map<string, string>();
+    for (const fig of result.figures ?? []) {
+      if (!width || !height) continue;
+      const [x0, y0, x1, y1] = fig.bbox_1000;
+      const left = Math.max(0, Math.round((x0 / 1000) * width));
+      const top = Math.max(0, Math.round((y0 / 1000) * height));
+      const cropWidth = Math.min(width - left, Math.round(((x1 - x0) / 1000) * width));
+      const cropHeight = Math.min(height - top, Math.round(((y1 - y0) / 1000) * height));
+      if (cropWidth <= 0 || cropHeight <= 0) continue;
+
+      const filename = `page${pageIndex + 1}_${fig.id}.png`;
+      const cropped = await sharp(pagePng)
+        .extract({ left, top, width: cropWidth, height: cropHeight })
+        .png()
+        .toBuffer();
+      images.set(filename, cropped);
+      figureFilenames.set(fig.id, filename);
+    }
+
+    for (const q of result.questions ?? []) {
+      const imageUrls = (q.figure_refs ?? [])
+        .map((id) => figureFilenames.get(id))
+        .filter((f): f is string => Boolean(f));
+      allQuestions.push({ ...q, image_urls: imageUrls } as ExtractedExam["questions"][number]);
+    }
+  }
+
+  return {
+    extracted: { title: title ?? "", subject: subject ?? "", source_branch: "PDF_IMAGE_ONLY", questions: allQuestions },
+    images,
+  };
 }
