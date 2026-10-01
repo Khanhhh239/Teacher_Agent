@@ -108,16 +108,21 @@ export async function extractDocx(buf: Buffer): Promise<DocxExtractResult> {
           if (target) {
             const wmfBuf = await resolveMedia(target);
             if (wmfBuf) {
-              textParts.push(` [CÔNG THỨC CHƯA NHẬN DẠNG #${equationCounter} — công thức MathType cũ, cần giáo viên nhập tay LaTeX hoặc xuất file thành PDF rồi tải lại để hệ thống tự OCR] `);
-              warnings.push(
-                `Công thức ${equationCounter} là ảnh MathType cũ (WMF) — hệ thống web chưa tự OCR được loại này. Khuyến nghị: mở file này trong Word, chọn "Save As" → PDF, rồi tải file PDF lên thay vì file Word.`
-              );
+              // Marker ngắn gọn [CT?N] — giải thích đầy đủ chỉ nằm trong warnings (hiện 1 lần
+              // ở đầu trang), KHÔNG lặp lại nguyên câu dài cho mỗi công thức (từng làm UI rối,
+              // một câu hỏi có 5-10 công thức thiếu sẽ ra cả đoạn văn dài không đọc nổi).
+              textParts.push(` [CT?${equationCounter}] `);
               handled = true;
             }
           }
         }
         if (!handled) {
-          textParts.push(` [CÔNG THỨC KHÔNG XÁC ĐỊNH #${equationCounter}] `);
+          textParts.push(` [CT?${equationCounter}] `);
+        }
+        if (!warnings.length) {
+          warnings.push(
+            `File dùng công thức MathType cũ (ảnh WMF) — hệ thống web chưa tự OCR được loại này. Các vị trí đánh dấu [CT?N] trong câu hỏi cần giáo viên tự nhập LaTeX. Khuyến nghị cho lần sau: mở file trong Word, chọn "Save As" → PDF, rồi tải file PDF lên thay vì file Word để hệ thống tự OCR được toàn bộ công thức.`
+          );
         }
       } else if (ns === W_NS && local === "drawing") {
         const blips = el.getElementsByTagNameNS(A_NS, "blip");
