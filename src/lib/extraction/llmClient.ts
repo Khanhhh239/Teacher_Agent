@@ -203,16 +203,20 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Gọi Gemini generateContent với parts tuỳ ý, tự retry 2 lần (backoff 2s) khi gặp lỗi
- * tạm thời (429 hết quota, 503 quá tải, hoặc timeout mạng) — đây là lỗi thoáng qua chứ
- * không phải lỗi code. Chỉ retry 2 lần (không phải 3) để tổng thời gian không vượt quá
- * maxDuration của route (180s). */
+/** Gọi Gemini generateContent với parts tuỳ ý, tự retry khi gặp lỗi tạm thời (429 hết
+ * quota, 503 quá tải, hoặc timeout mạng) — đây là lỗi thoáng qua chứ không phải lỗi code.
+ * Backoff tăng dần (2s/5s/10s, tổng ~17s chờ) để vượt qua các đợt Gemini quá tải ngắn hạn
+ * (thực tế quan sát được "503 high demand" có thể kéo dài vài chục giây), vẫn nằm sâu
+ * trong maxDuration của route (180s). */
+const RETRY_BACKOFF_MS = [2000, 5000, 10000];
+
 async function callGeminiRaw(model: string, parts: unknown[]): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("Chưa cấu hình GEMINI_API_KEY");
 
   let lastError: Error | null = null;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const maxAttempts = RETRY_BACKOFF_MS.length + 1;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       const res = await undiciFetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
@@ -234,8 +238,8 @@ async function callGeminiRaw(model: string, parts: unknown[]): Promise<string> {
     } catch (e) {
       lastError = e instanceof Error ? e : new Error(String(e));
       const transient = isTransientError(lastError.message);
-      if (!transient || attempt === 1) throw lastError;
-      await sleep(2000);
+      if (!transient || attempt === maxAttempts - 1) throw lastError;
+      await sleep(RETRY_BACKOFF_MS[attempt]);
     }
   }
   throw lastError ?? new Error("Gemini: lỗi không xác định");
