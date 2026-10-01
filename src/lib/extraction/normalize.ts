@@ -10,7 +10,14 @@ import type { ExtractedExam } from "@/types/exam";
 function stripImageMarkers(text: string): string {
   return text
     .replace(/\[IMAGE:[^\]]*\]/g, "")
+    // LLM đôi khi double-escape "\n" thành literal 2 ký tự backslash+n thay vì JSON tự
+    // decode thành 1 ký tự xuống dòng thật — còn sót lại dạng text thô "\n" hiển thị cho
+    // học sinh (đặc biệt quanh bảng Markdown, nơi \n cần là xuống dòng thật để tách dòng).
+    // Chỉ loại trừ \neq, \nabla (lệnh LaTeX thật bắt đầu bằng "n") — KHÔNG dùng
+    // (?![a-zA-Z]) chung chung vì câu tiếng Việt sau xuống dòng luôn viết hoa chữ đầu.
+    .replace(/\\n(?!eq|abla)/g, "\n")
     .replace(/[ \t]+/g, " ")
+    .replace(/[ \t]*\n[ \t]*/g, "\n")
     .replace(/\s+([.,;:])/g, "$1")
     .trim();
 }

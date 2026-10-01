@@ -43,6 +43,8 @@ Quy tắc phân loại và điểm mặc định theo cấu trúc đề THPT Vi�
 - "true_false_group": 4 mệnh đề con a/b/c/d, mỗi mệnh đề Đúng/Sai độc lập. max_score mặc định 1.0, score_rule "thpt2025_truefalse_partial".
 - "short_answer": điền một giá trị số/chuỗi ngắn. max_score mặc định 0.5, score_rule "standard".
 
+Nếu đề bài có bảng số liệu (vd bảng tần số ghép nhóm), trình bày bằng cú pháp Markdown table ngay trong content_latex, ví dụ: "| Nhóm | [0;40) | [40;80) |\n| --- | --- | --- |\n| Tần số | 11 | 10 |". TUYỆT ĐỐI KHÔNG dùng \\begin{tabular}...\\end{tabular} hay bất kỳ cú pháp LaTeX bảng nào khác — hệ thống hiển thị bằng KaTeX, không render được môi trường bảng LaTeX, chỉ render được công thức toán đơn lẻ trong $...$ và bảng Markdown.
+
 Nếu có đáp án/lời giải đi kèm, dùng để điền correct_answer / sub_statements[].answer / short_answer_normalized. Nếu KHÔNG chắc chắn, để null và ghi rõ lý do vào raw_ocr_notes — TUYỆT ĐỐI không bịa đáp án.
 
 Xử lý marker trong văn bản (BẮT BUỘC xóa hết các marker này khỏi content_latex sau khi xử lý — không bao giờ để sót nguyên văn "[IMAGE:...]" hay "\n" thừa trong nội dung hiển thị cho học sinh):
@@ -76,8 +78,9 @@ Quy tắc:
 - "multiple_choice": 4 lựa chọn A/B/C/D. max_score 0.25, score_rule "standard".
 - "true_false_group": 4 mệnh đề con a/b/c/d. max_score 1.0, score_rule "thpt2025_truefalse_partial".
 - "short_answer": điền giá trị ngắn. max_score 0.5, score_rule "standard".
-- image_url luôn để null (hệ thống chưa tự cắt ảnh từ PDF) — nhưng PHẢI ghi chú vào raw_ocr_notes nếu câu có hình vẽ kèm theo để giáo viên biết cần tự thêm ảnh.
+- image_urls luôn để mảng rỗng [] (hệ thống chưa tự cắt ảnh từ PDF) — nhưng PHẢI ghi chú vào raw_ocr_notes nếu câu có hình vẽ kèm theo để giáo viên biết cần tự thêm ảnh.
 - Nếu có đáp án/lời giải trong PDF (một số đề có kèm đáp án ở cuối), dùng để điền đáp án đúng. Nếu không, để null, TUYỆT ĐỐI không bịa.
+- Nếu đề bài có bảng số liệu, trình bày bằng cú pháp Markdown table trong content_latex (vd: "| Nhóm | [0;40) |\n| --- | --- |\n| Tần số | 11 |"). TUYỆT ĐỐI KHÔNG dùng \\begin{tabular}...\\end{tabular} — hệ thống không render được bảng LaTeX.
 
 Chỉ trả JSON hợp lệ, không markdown, không code fence.`;
 
