@@ -85,9 +85,20 @@ Quy tắc:
 - "figure_refs": mảng id các hình (từ "figures") thuộc về câu hỏi này, theo đúng thứ tự xuất hiện. Một câu có thể có 0, 1 hoặc nhiều hình. Để mảng rỗng [] nếu câu không có hình.
 - Nếu có đáp án/lời giải trên trang này, dùng để điền đáp án đúng. Nếu không, để null, TUYỆT ĐỐI không bịa.
 - Nếu trang có bảng số liệu, trình bày bằng cú pháp Markdown table trong content_latex (vd: "| Nhóm | [0;40) |\n| --- | --- |\n| Tần số | 11 |"). TUYỆT ĐỐI KHÔNG dùng \\begin{tabular}...\\end{tabular} — hệ thống không render được bảng LaTeX.
-- Nếu 1 câu hỏi bắt đầu ở trang trước và tiếp tục ở trang này (bị cắt trang), chỉ trả phần thuộc trang này, thêm tiền tố "[TIẾP TRANG TRƯỚC] " vào đầu content_latex.
-
+{continuationRule}
 Chỉ trả JSON hợp lệ, không markdown, không code fence.`;
+
+const CONTINUATION_RULE_TEMPLATE = `
+QUAN TRỌNG — câu hỏi bị cắt ngang trang: Dưới đây là phần cuối nội dung đã đọc được ở TRANG TRƯỚC, câu hỏi đó CHƯA kết thúc (bị cắt bởi lề trang):
+---
+{prevTail}
+---
+Trang hiện tại BẮT ĐẦU bằng phần TIẾP THEO của chính câu hỏi đó (có thể là phần mệnh đề a/b/c/d, phần lựa chọn A/B/C/D, hoặc đoạn văn còn lại). Với câu hỏi đầu tiên trên trang này:
+1. Đặt content_latex BẮT ĐẦU bằng marker "[TIẾP TRANG TRƯỚC] " rồi mới đến nội dung PHẦN MỚI đọc được trên trang này (không lặp lại phần đã cho ở trên).
+2. Xác định "type" dựa trên TOÀN BỘ câu hỏi (cả phần ở trang trước lẫn phần ở trang này) — vd nếu thấy đủ 4 mệnh đề a/b/c/d Đúng/Sai thì type phải là "true_false_group", không phải "multiple_choice".
+3. Điền đầy đủ "options"/"sub_statements" cho câu đó dựa trên phần đọc được ở trang này.
+Các câu hỏi KHÁC trên trang (không phải câu đầu tiên) xử lý bình thường, không thêm marker.
+`;
 
 /**
  * LLM thường xuất backslash LaTeX (\vec, \frac, \left...) trong chuỗi JSON mà KHÔNG
@@ -290,12 +301,34 @@ interface PdfPageResult {
   figures: Array<{ id: string; bbox_1000: [number, number, number, number] }>;
 }
 
-async function ocrPdfPage(pagePngBase64: string): Promise<PdfPageResult> {
+async function ocrPdfPage(pagePngBase64: string, prevTail: string | null): Promise<PdfPageResult> {
   if (provider() === "deepseek") {
     throw new Error("DeepSeek chưa hỗ trợ nhận ảnh trong pipeline này — dùng Gemini cho nhánh PDF.");
   }
-  const text = await callGeminiWithImage(pagePngBase64, PDF_PAGE_PROMPT);
+  const continuationRule = prevTail
+    ? CONTINUATION_RULE_TEMPLATE.replace("{prevTail}", prevTail)
+    : "";
+  const prompt = PDF_PAGE_PROMPT.replace("{continuationRule}", continuationRule);
+  const text = await callGeminiWithImage(pagePngBase64, prompt);
   return extractJson(text) as PdfPageResult;
+}
+
+const CONTINUATION_MARKER = "[TIẾP TRANG TRƯỚC]";
+
+/** Tóm tắt ngắn gọn 1 câu hỏi (nội dung + mệnh đề/lựa chọn) để làm "ngữ cảnh cuối trang"
+ * truyền sang lần gọi Gemini cho trang kế tiếp — giúp model nhận ra câu hỏi bị cắt trang
+ * thay vì coi là 2 câu độc lập (đã quan sát thực tế: 1 câu true_false_group bị cắt làm
+ * đôi thành 1 câu multiple_choice rỗng + 1 câu true_false_group thiếu phần mở đầu). */
+function summarizeQuestionTail(q: Record<string, unknown>, maxLen = 220): string {
+  const parts = [String(q.content_latex ?? "")];
+  for (const s of (q.sub_statements as Array<{ text_latex?: string }>) ?? []) {
+    if (s.text_latex) parts.push(s.text_latex);
+  }
+  for (const o of (q.options as Array<{ text_latex?: string }>) ?? []) {
+    if (o.text_latex) parts.push(o.text_latex);
+  }
+  const full = parts.join(" ");
+  return full.length > maxLen ? full.slice(-maxLen) : full;
 }
 
 /**
@@ -315,12 +348,27 @@ export async function extractPdfPages(
   const allQuestions: ExtractedExam["questions"] = [];
   let title: string | null = null;
   let subject: string | null = null;
+  let prevTail: string | null = null;
 
   for (let pageIndex = 0; pageIndex < pagePngs.length; pageIndex++) {
     const pagePng = pagePngs[pageIndex];
     const { width, height } = await sharp(pagePng).metadata();
 
-    const result = await ocrPdfPage(pagePng.toString("base64"));
+    let result: PdfPageResult;
+    try {
+      result = await ocrPdfPage(pagePng.toString("base64"), prevTail);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (prevTail && msg.includes("RECITATION")) {
+        // Gemini đôi khi từ chối sinh nội dung (finishReason RECITATION, nghi ngờ trùng lặp
+        // bản quyền) khi prompt chứa nguyên văn trích dẫn dài từ trang trước làm ngữ cảnh —
+        // thử lại KHÔNG kèm ngữ cảnh thay vì để cả lần upload lỗi; mất lợi ích ghép câu bị
+        // cắt trang cho đúng 1 trang này, nhưng vẫn ra được kết quả thay vì lỗi 500.
+        result = await ocrPdfPage(pagePng.toString("base64"), null);
+      } else {
+        throw e;
+      }
+    }
     if (pageIndex === 0) {
       title = result.title ?? title;
       subject = result.subject ?? subject;
@@ -329,7 +377,13 @@ export async function extractPdfPages(
     const figureFilenames = new Map<string, string>();
     for (const fig of result.figures ?? []) {
       if (!width || !height) continue;
-      const [x0, y0, x1, y1] = fig.bbox_1000;
+      const bbox = fig.bbox_1000;
+      // LLM đôi khi trả bbox thiếu/sai định dạng (không đủ 4 số, hoặc không phải số) — bỏ
+      // qua hình đó thay vì để sharp crash cả lần upload vì 1 toạ độ hỏng.
+      if (!Array.isArray(bbox) || bbox.length !== 4 || bbox.some((n) => typeof n !== "number" || !Number.isFinite(n))) {
+        continue;
+      }
+      const [x0, y0, x1, y1] = bbox;
       const left = Math.max(0, Math.round((x0 / 1000) * width));
       const top = Math.max(0, Math.round((y0 / 1000) * height));
       const cropWidth = Math.min(width - left, Math.round(((x1 - x0) / 1000) * width));
@@ -345,11 +399,34 @@ export async function extractPdfPages(
       figureFilenames.set(fig.id, filename);
     }
 
-    for (const q of result.questions ?? []) {
+    const pageQuestions = result.questions ?? [];
+    for (let qi = 0; qi < pageQuestions.length; qi++) {
+      const q = pageQuestions[qi];
       const imageUrls = (q.figure_refs ?? [])
         .map((id) => figureFilenames.get(id))
         .filter((f): f is string => Boolean(f));
-      allQuestions.push({ ...q, image_urls: imageUrls } as ExtractedExam["questions"][number]);
+      const contentStr = String(q.content_latex ?? "");
+
+      if (qi === 0 && contentStr.startsWith(CONTINUATION_MARKER) && allQuestions.length > 0) {
+        // Câu đầu trang này là phần tiếp của câu cuối trang trước — ghép lại thành 1 câu,
+        // không push thêm entry mới. Ưu tiên type/sub_statements/options của lần đọc này
+        // (sau khi đã thấy đủ nội dung) vì trang trước có thể đã đoán sai type do thiếu
+        // thông tin (vd đoán multiple_choice vì chưa thấy mệnh đề a/b/c/d).
+        const prev = allQuestions[allQuestions.length - 1] as unknown as Record<string, unknown>;
+        const mergedContent = `${String(prev.content_latex ?? "")} ${contentStr.slice(CONTINUATION_MARKER.length).trim()}`.trim();
+        allQuestions[allQuestions.length - 1] = {
+          ...prev,
+          ...q,
+          content_latex: mergedContent,
+          image_urls: [...((prev.image_urls as string[]) ?? []), ...imageUrls],
+        } as ExtractedExam["questions"][number];
+      } else {
+        allQuestions.push({ ...q, image_urls: imageUrls } as ExtractedExam["questions"][number]);
+      }
+    }
+
+    if (pageQuestions.length > 0) {
+      prevTail = summarizeQuestionTail(pageQuestions[pageQuestions.length - 1]);
     }
   }
 
