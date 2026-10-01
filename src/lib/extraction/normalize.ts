@@ -8,12 +8,10 @@ import type { ExtractedExam } from "@/types/exam";
  * đảm bảo chắc chắn — dọn sạch mọi marker còn sót lại ở đây bất kể LLM có xóa hay chưa.
  */
 /**
- * LLM hay viết $\vec{v_3}$ (dấu accent bọc luôn cả chỉ số dưới thành 1 khối) thay vì
- * $\vec{v}_3$ (chỉ số đặt NGOÀI accent) — về mặt LaTeX cả 2 cách viết đều "hợp lệ cú
- * pháp", nhưng KaTeX đặt mũi tên/mũ dựa trên bề rộng toàn bộ base+subscript khi chúng bị
- * gộp chung trong 1 accent, khiến mũi tên lệch vị trí và nhìn như ký tự khác (quan sát
- * thực tế: "v_3" với \vec bọc ngoài hiển thị trông giống chữ "y3"). Tách chỉ số ra ngoài
- * accent để KaTeX đặt đúng vị trí, không đổi ý nghĩa toán học.
+ * Khi $\vec{X_n}$ bọc luôn chỉ số dưới vào trong cùng 1 accent thay vì $\vec{X}_n$ (chỉ
+ * số đặt NGOÀI accent), tách ra cho đúng cấu trúc — không đổi ý nghĩa toán học, chỉ dọn
+ * cú pháp. (Không phải nguyên nhân chính của lỗi "trông giống chữ khác" bên dưới, nhưng
+ * vẫn là cách viết đúng hơn nên giữ lại.)
  */
 function fixAccentOverScript(text: string): string {
   return text.replace(
@@ -25,8 +23,19 @@ function fixAccentOverScript(text: string): string {
   );
 }
 
+/**
+ * Nguyên nhân THẬT của lỗi vectơ hiển thị trông giống chữ khác (vd "v" trông như "y"):
+ * đã verify trực tiếp bằng KaTeX thật ở đúng cỡ chữ của app — glyph mũi tên nhỏ, gọn của
+ * lệnh \vec đặt sát ngay phía trên 1 ký tự thường (đặc biệt "v") dễ bị đọc nhầm thành ký
+ * tự khác. \overrightarrow cho cùng ý nghĩa toán học nhưng vẽ mũi tên dài, tách biệt rõ
+ * ràng khỏi ký tự bên dưới — không còn bị nhầm lẫn. Đổi toàn bộ \vec thành \overrightarrow.
+ */
+function fixVecGlyph(text: string): string {
+  return text.replace(/\\vec\{/g, "\\overrightarrow{");
+}
+
 function stripImageMarkers(text: string): string {
-  return fixAccentOverScript(text)
+  return fixVecGlyph(fixAccentOverScript(text))
     .replace(/\[IMAGE:[^\]]*\]/g, "")
     // LLM đôi khi double-escape "\n" thành literal 2 ký tự backslash+n thay vì JSON tự
     // decode thành 1 ký tự xuống dòng thật — còn sót lại dạng text thô "\n" hiển thị cho

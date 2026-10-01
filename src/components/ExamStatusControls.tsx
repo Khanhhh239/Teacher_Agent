@@ -23,6 +23,10 @@ export function ExamStatusControls({
   async function markReady() {
     setBusy(true);
     const supabase = createClient();
+    // Xem trước toàn bộ đề trong modal đã đóng vai trò là bước duyệt — không bắt giáo
+    // viên phải bấm "đã duyệt" từng câu riêng lẻ nữa (tốn thời gian với đề 20+ câu).
+    // Xác nhận ở preview coi như duyệt hết mọi câu cùng lúc.
+    await supabase.from("questions").update({ needs_review: false }).eq("exam_id", exam.id);
     await supabase.from("exams").update({ status: "ready" }).eq("id", exam.id);
     setBusy(false);
     setShowPreview(false);
@@ -31,17 +35,18 @@ export function ExamStatusControls({
 
   return (
     <div className="flex items-center gap-3">
-      {pendingReview > 0 ? (
-        <span className="text-sm text-amber-700">
-          Còn {pendingReview} câu chưa duyệt — phải duyệt hết trước khi tạo phòng thi.
-        </span>
-      ) : exam.status !== "ready" ? (
-        <button
-          onClick={() => setShowPreview(true)}
-          className="rounded-md bg-green-600 px-3 py-1.5 text-sm font-medium text-white"
-        >
-          Đánh dấu sẵn sàng
-        </button>
+      {exam.status !== "ready" ? (
+        <>
+          {pendingReview > 0 && (
+            <span className="text-sm text-slate-500">{pendingReview} câu có thể cần xem lại kỹ hơn.</span>
+          )}
+          <button
+            onClick={() => setShowPreview(true)}
+            className="rounded-md bg-green-600 px-3 py-1.5 text-sm font-medium text-white"
+          >
+            Xem trước & Đánh dấu sẵn sàng
+          </button>
+        </>
       ) : (
         <Link
           href={`/dashboard/exams/${exam.id}/rooms`}
