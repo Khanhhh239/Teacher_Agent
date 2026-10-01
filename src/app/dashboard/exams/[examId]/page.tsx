@@ -33,7 +33,11 @@ export default async function ExamReviewPage({
             {(questions as Question[] | null)?.length ?? 0} câu
           </p>
         </div>
-        <ExamStatusControls exam={exam as Exam} pendingReview={pendingReview} />
+        <ExamStatusControls
+          exam={exam as Exam}
+          questions={(questions as Question[] | null) ?? []}
+          pendingReview={pendingReview}
+        />
       </div>
 
       <div className="space-y-3">
