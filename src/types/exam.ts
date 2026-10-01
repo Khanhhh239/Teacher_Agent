@@ -18,6 +18,7 @@ export interface Question {
   order_index: number;
   type: QuestionType;
   content_latex: string;
+  part_label: string | null;
   image_urls: string[];
   options: QuestionOption[];
   sub_statements: SubStatement[];
@@ -59,6 +60,8 @@ export interface ExamRoom {
   closes_at: string | null;
   is_active: boolean;
   require_fullscreen: boolean;
+  max_attempts: number;
+  violation_kick_limit: number;
   created_at: string;
 }
 
@@ -76,6 +79,7 @@ export interface ExamSession {
   submitted_at: string | null;
   total_score: number | null;
   violation_count: number;
+  kicked_at: string | null;
 }
 
 export type StudentAnswerPayload =
@@ -116,6 +120,7 @@ export interface ExtractedExam {
   questions: Array<{
     type: QuestionType;
     content_latex: string;
+    part_label: string | null;
     image_urls: string[];
     options: QuestionOption[];
     sub_statements: SubStatement[];

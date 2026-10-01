@@ -20,6 +20,29 @@ export function seededShuffle<T>(items: T[], seed: number): T[] {
   return arr;
 }
 
+/**
+ * Xáo trộn nhưng giữ nguyên thứ tự các NHÓM (vd PHẦN I/II/III của đề thi) — chỉ xáo các
+ * phần tử bên TRONG mỗi nhóm, không xáo lẫn qua nhóm khác. Nhóm không có part_label (null)
+ * được coi là 1 nhóm riêng theo đúng vị trí xuất hiện đầu tiên của nó trong danh sách gốc.
+ */
+export function seededShuffleByGroup<T>(items: T[], seed: number, groupKey: (item: T) => string): T[] {
+  const groupOrder: string[] = [];
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const key = groupKey(item);
+    if (!groups.has(key)) {
+      groups.set(key, []);
+      groupOrder.push(key);
+    }
+    groups.get(key)!.push(item);
+  }
+  const result: T[] = [];
+  for (const key of groupOrder) {
+    result.push(...seededShuffle(groups.get(key)!, seed));
+  }
+  return result;
+}
+
 /** Sinh seed số nguyên ổn định từ chuỗi (vd: session_id + question_id). */
 export function seedFromString(str: string): number {
   let hash = 0;

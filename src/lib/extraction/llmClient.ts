@@ -81,7 +81,12 @@ Quy tắc:
 - "multiple_choice": 4 lựa chọn A/B/C/D. max_score 0.25, score_rule "standard".
 - "true_false_group": 4 mệnh đề con a/b/c/d. max_score 1.0, score_rule "thpt2025_truefalse_partial".
 - "short_answer": điền giá trị ngắn. max_score 0.5, score_rule "standard".
-- "figures": liệt kê MỌI hình vẽ/đồ thị/sơ đồ minh họa xuất hiện trên trang (hình học không gian, đồ thị hàm số, sơ đồ, bảng vẽ tay...) — KHÔNG liệt kê icon trang trí hay logo. "bbox_1000" là toạ độ khung hình đó [x0,y0,x1,y1], chuẩn hoá theo thang 0-1000 trên cả 2 trục, (0,0) là góc trên-trái trang, (1000,1000) là góc dưới-phải trang. Khung phải ôm sát đúng hình vẽ, không lấy dư vùng chữ xung quanh.
+- "figures": liệt kê MỌI hình vẽ/đồ thị/sơ đồ minh họa xuất hiện trên trang (hình học không gian, đồ thị hàm số, sơ đồ, bảng vẽ tay...) — KHÔNG liệt kê icon trang trí hay logo. "bbox_1000" là toạ độ khung hình đó [x0,y0,x1,y1], chuẩn hoá theo thang 0-1000 trên cả 2 trục, (0,0) là góc trên-trái trang, (1000,1000) là góc dưới-phải trang.
+  QUAN TRỌNG về độ chính xác khung cắt (đã quan sát thực tế lỗi khung sai gây ra 2 kiểu lỗi — khung quá LỚN chụp dính cả chữ của câu khác bên dưới/bên cạnh, hoặc khung quá NHỎ cắt mất 1 phần hình như nhãn đỉnh/điểm):
+  1. Xác định ranh giới hình vẽ bằng mắt: cạnh trên/dưới/trái/phải của khung PHẢI trùng với nét vẽ/nhãn chữ cái NGOÀI CÙNG của chính hình đó (vd nếu hình có đỉnh A ở trên cùng, khung phải đủ cao để trọn chữ "A", không cắt cụt).
+  2. Khung TUYỆT ĐỐI không được chứa bất kỳ dòng chữ nào thuộc nội dung câu hỏi (đề bài, đáp án A/B/C/D, câu hỏi khác) — nếu hình và chữ nằm sát nhau, dừng khung NGAY SÁT mép ngoài nét vẽ cuối cùng, chừa khoảng trắng chứ không lấn vào vùng chữ.
+  3. Nếu 1 trang có nhiều hình riêng biệt (vd nhiều câu hỏi mỗi câu 1 hình), mỗi hình phải có khung RIÊNG, không gộp 2 hình liền kề vào 1 bbox.
+  4. Trước khi trả kết quả, tự kiểm tra lại từng bbox: hình dạng cắt ra có đúng là 1 hình vẽ hoàn chỉnh, không thiếu nhãn, không dính chữ ngoài hình hay không.
 - "figure_refs": mảng id các hình (từ "figures") thuộc về câu hỏi này, theo đúng thứ tự xuất hiện. Một câu có thể có 0, 1 hoặc nhiều hình. Để mảng rỗng [] nếu câu không có hình.
 - Nếu có đáp án/lời giải trên trang này, dùng để điền đáp án đúng. Nếu không, để null, TUYỆT ĐỐI không bịa.
 - Nếu trang có bảng số liệu, trình bày bằng cú pháp Markdown table trong content_latex (vd: "| Nhóm | [0;40) |\n| --- | --- |\n| Tần số | 11 |"). TUYỆT ĐỐI KHÔNG dùng \\begin{tabular}...\\end{tabular} — hệ thống không render được bảng LaTeX.

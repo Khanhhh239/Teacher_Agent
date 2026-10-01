@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { seededShuffle, seedFromString } from "@/lib/shuffle";
+import { seededShuffle, seededShuffleByGroup, seedFromString } from "@/lib/shuffle";
 import type { Question } from "@/types/exam";
 
 export async function POST(request: Request, { params }: { params: Promise<{ code: string }> }) {
@@ -43,6 +43,26 @@ export async function POST(request: Request, { params }: { params: Promise<{ cod
     return NextResponse.json({ error: "Đề thi chưa có câu hỏi" }, { status: 400 });
   }
 
+  // Giới hạn số lần một học sinh được vào thi lại cùng 1 phòng — nhận diện học sinh qua
+  // SBD nếu có, không thì qua tên (vì SBD là tùy chọn). Đếm MỌI phiên trước đó bất kể
+  // trạng thái (kể cả đang làm dở), vì mỗi lần join là 1 lượt thi mới.
+  const trimmedCode = (student_code || "").trim();
+  let priorAttemptsQuery = supabase
+    .from("exam_sessions")
+    .select("id", { count: "exact", head: true })
+    .eq("room_id", room.id);
+  priorAttemptsQuery = trimmedCode
+    ? priorAttemptsQuery.eq("student_code", trimmedCode)
+    : priorAttemptsQuery.eq("student_name", student_name.trim());
+  const { count: priorAttempts } = await priorAttemptsQuery;
+  const maxAttempts = room.max_attempts ?? 1;
+  if ((priorAttempts ?? 0) >= maxAttempts) {
+    return NextResponse.json(
+      { error: `Bạn đã dùng hết số lần làm bài cho phép (${maxAttempts} lần).` },
+      { status: 403 }
+    );
+  }
+
   const { data: session, error: sessionError } = await supabase
     .from("exam_sessions")
     .insert({
@@ -64,11 +84,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ cod
   const shuffleOptions = settings.shuffle_options ?? true;
 
   const baseSeed = seedFromString(session.id);
+  // Giữ nguyên thứ tự các PHẦN (I/II/III...) của đề — chỉ xáo câu hỏi TRONG từng phần,
+  // không xáo lẫn qua phần khác (đúng cấu trúc đề thi gốc).
   const questionOrder = shuffleQuestions
-    ? seededShuffle(
-        questions.map((q: Question) => q.id),
-        baseSeed
-      )
+    ? seededShuffleByGroup(questions as Question[], baseSeed, (q) => q.part_label ?? "").map((q) => q.id)
     : questions.map((q: Question) => q.id);
 
   const optionOrder: Record<string, string[]> = {};

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { scoreExam } from "@/lib/scoring";
+import { buildSessionBreakdown } from "@/lib/sessionBreakdown";
 import type { Question, StudentAnswerPayload } from "@/types/exam";
 
 export async function POST(_request: Request, { params }: { params: Promise<{ sessionId: string }> }) {
@@ -16,14 +17,14 @@ export async function POST(_request: Request, { params }: { params: Promise<{ se
   if (!session) {
     return NextResponse.json({ error: "Không tìm thấy phiên thi" }, { status: 404 });
   }
+  const examId = session.exam_rooms.exam_id;
+
   if (session.status !== "in_progress") {
-    return NextResponse.json({ total_score: session.total_score, already_submitted: true });
+    const breakdown = await buildSessionBreakdown(supabase, session, examId);
+    return NextResponse.json({ total_score: session.total_score, already_submitted: true, questions: breakdown });
   }
 
-  const { data: questions } = await supabase
-    .from("questions")
-    .select("*")
-    .eq("exam_id", session.exam_rooms.exam_id);
+  const { data: questions } = await supabase.from("questions").select("*").eq("exam_id", examId);
 
   const { data: answers } = await supabase
     .from("student_answers")
@@ -54,5 +55,6 @@ export async function POST(_request: Request, { params }: { params: Promise<{ se
     })
     .eq("id", sessionId);
 
-  return NextResponse.json({ total_score: totalScore });
+  const breakdown = await buildSessionBreakdown(supabase, session, examId);
+  return NextResponse.json({ total_score: totalScore, questions: breakdown });
 }

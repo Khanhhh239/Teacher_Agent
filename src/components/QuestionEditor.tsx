@@ -58,6 +58,19 @@ export function QuestionEditor({ question }: { question: Question }) {
     setQ({ ...q, sub_statements });
   }
 
+  const [uploadingIdx, setUploadingIdx] = useState<number | null>(null);
+
+  async function replaceImage(idx: number, file: File) {
+    setUploadingIdx(idx);
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("index", String(idx));
+    const res = await fetch(`/api/questions/${q.id}/replace-image`, { method: "POST", body: formData });
+    const data = await res.json();
+    setUploadingIdx(null);
+    if (data.image_urls) setQ({ ...q, image_urls: data.image_urls });
+  }
+
   return (
     <div className={`rounded-lg border bg-white p-5 shadow-sm ${q.needs_review ? "border-amber-400 ring-1 ring-amber-200" : "border-slate-200"}`}>
       <div className="mb-3 flex items-center justify-between">
@@ -71,12 +84,27 @@ export function QuestionEditor({ question }: { question: Question }) {
         )}
       </div>
 
-      {/* Ảnh minh họa luôn hiển thị (cả khi đang sửa) — giáo viên cần đối chiếu nội dung với ảnh gốc */}
+      {/* Ảnh minh họa luôn hiển thị (cả khi đang sửa) — giáo viên cần đối chiếu nội dung với ảnh gốc.
+          Ảnh AI tự cắt đôi khi thừa/thiếu nội dung — cho phép giáo viên tự chụp & thay thế. */}
       {q.image_urls.length > 0 && (
         <div className="mb-3 flex flex-wrap gap-2">
           {q.image_urls.map((url, i) => (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img key={i} src={url} alt="" className="max-h-72 rounded-md border" />
+            <div key={i} className="relative">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={url} alt="" className="max-h-72 rounded-md border" />
+              <label className="absolute bottom-1 right-1 cursor-pointer rounded bg-black/60 px-2 py-0.5 text-xs text-white hover:bg-black/80">
+                {uploadingIdx === i ? "Đang tải..." : "Thay ảnh"}
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) replaceImage(i, file);
+                  }}
+                />
+              </label>
+            </div>
           ))}
         </div>
       )}

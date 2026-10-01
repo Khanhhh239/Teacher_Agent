@@ -34,6 +34,22 @@ function fixVecGlyph(text: string): string {
   return text.replace(/\\vec\{/g, "\\overrightarrow{");
 }
 
+/**
+ * LLM hay nhúng nguyên văn tiêu đề phần ("PHẦN II. Thí sinh trả lời...") và số thứ tự câu
+ * gốc trong đề ("Câu 6: ...") thẳng vào content_latex. UI lại tự đánh số theo vị trí hiện
+ * tại của câu hỏi (sau khi xáo trộn) — 2 cách đánh số này không khớp nhau (vd UI hiển thị
+ * "Câu 22." ngay trước nội dung đã có sẵn "Câu 6:", nhìn như 2 câu đè lên nhau). Tách
+ * "PHẦN..." ra thành part_label riêng (hiển thị 1 lần làm tiêu đề phần, không lặp lại mỗi
+ * câu), và xóa hẳn số thứ tự gốc "Câu N:" khỏi nội dung vì không còn đúng sau khi xáo trộn.
+ */
+function extractPartLabel(text: string): { partLabel: string | null; rest: string } {
+  const partMatch = text.match(/^\s*(PHẦN\s+[IVXLC\d]+[^\n]*?)(?:\n+|\s*$)/i);
+  const partLabel = partMatch ? partMatch[1].trim() : null;
+  const afterPart = partMatch ? text.slice(partMatch[0].length) : text;
+  const rest = afterPart.replace(/^\s*Câu\s+\d+\s*[:.]\s*/i, "");
+  return { partLabel, rest };
+}
+
 function stripImageMarkers(text: string): string {
   return fixVecGlyph(fixAccentOverScript(text))
     .replace(/\[IMAGE:[^\]]*\]/g, "")
@@ -68,9 +84,11 @@ export function normalizeExtractedExam(raw: unknown): ExtractedExam {
   const data = raw as Partial<ExtractedExam> & { questions?: unknown[] };
   const questions = (data.questions ?? []).map((q) => {
     const question = q as Record<string, unknown>;
+    const { partLabel, rest } = extractPartLabel(String(question.content_latex ?? ""));
     return {
       type: question.type ?? "short_answer",
-      content_latex: stripImageMarkers(String(question.content_latex ?? "")),
+      content_latex: stripImageMarkers(rest),
+      part_label: partLabel,
       image_urls: normalizeImageUrls(question),
       options: ((question.options as Array<Record<string, unknown>>) ?? []).map((o) => ({
         key: o.key ?? "",

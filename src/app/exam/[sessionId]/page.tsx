@@ -10,6 +10,7 @@ interface ExamQuestion {
   id: string;
   type: "multiple_choice" | "true_false_group" | "short_answer";
   content_latex: string;
+  part_label: string | null;
   image_urls: string[];
   options: { key: string; text_latex: string }[];
   sub_statements: { key: string; text_latex: string }[];
@@ -53,6 +54,8 @@ export default function TakeExamPage({ params }: { params: Promise<{ sessionId: 
       });
   }, [sessionId]);
 
+  const [kicked, setKicked] = useState(false);
+
   const submit = useCallback(async () => {
     if (submittedRef.current) return;
     submittedRef.current = true;
@@ -60,6 +63,11 @@ export default function TakeExamPage({ params }: { params: Promise<{ sessionId: 
     await fetch(`/api/sessions/${sessionId}/submit`, { method: "POST" });
     router.push(`/exam/${sessionId}/result`);
   }, [sessionId, router]);
+
+  const handleKicked = useCallback(() => {
+    setKicked(true);
+    submit();
+  }, [submit]);
 
   useEffect(() => {
     if (!data) return;
@@ -76,7 +84,7 @@ export default function TakeExamPage({ params }: { params: Promise<{ sessionId: 
     return () => clearInterval(interval);
   }, [data, submit]);
 
-  useAntiCheat(sessionId, !!data && data.status === "in_progress", data?.require_fullscreen ?? false);
+  useAntiCheat(sessionId, !!data && data.status === "in_progress", data?.require_fullscreen ?? false, handleKicked);
 
   function saveAnswer(questionId: string, answer: StudentAnswerPayload) {
     setAnswers((prev) => ({ ...prev, [questionId]: answer }));
@@ -89,6 +97,14 @@ export default function TakeExamPage({ params }: { params: Promise<{ sessionId: 
 
   if (!data) {
     return <div className="flex min-h-screen items-center justify-center">Đang tải đề thi...</div>;
+  }
+
+  if (kicked) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-4 text-center">
+        Bạn đã bị tự động nộp bài do vi phạm quy định phòng thi quá số lần cho phép.
+      </div>
+    );
   }
 
   if (data.status !== "in_progress") {
@@ -113,10 +129,15 @@ export default function TakeExamPage({ params }: { params: Promise<{ sessionId: 
       </header>
 
       <div className="mx-auto max-w-3xl space-y-4 p-4">
-        {data.questions.map((q, idx) => (
-          <div key={q.id} className="rounded-lg border bg-white p-4">
-            <p className="mb-3 font-medium">
-              Câu {idx + 1}. <LatexText text={q.content_latex} />
+        {data.questions.map((q, idx) => {
+          const prevPart = idx > 0 ? data.questions[idx - 1].part_label : null;
+          const showPartHeader = q.part_label && q.part_label !== prevPart;
+          return (
+          <div key={q.id}>
+            {showPartHeader && <h2 className="mb-2 mt-2 font-bold">{q.part_label}</h2>}
+            <div className="rounded-lg border bg-white p-4">
+            <p className="mb-3">
+              <span className="font-bold">Câu {idx + 1}.</span> <LatexText text={q.content_latex} />
             </p>
             {q.image_urls.length > 0 && (
               <div className="mb-3 flex flex-wrap gap-2">
@@ -194,8 +215,10 @@ export default function TakeExamPage({ params }: { params: Promise<{ sessionId: 
                 className="w-full rounded-md border px-3 py-2 text-sm"
               />
             )}
+            </div>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="fixed bottom-0 left-0 right-0 border-t bg-white p-4">

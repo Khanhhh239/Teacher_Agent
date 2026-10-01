@@ -94,6 +94,7 @@ export async function POST(request: Request) {
       order_index: i,
       type: q.type,
       content_latex: q.content_latex,
+      part_label: q.part_label,
       image_urls: imageUrls,
       options: q.options,
       sub_statements: q.sub_statements,

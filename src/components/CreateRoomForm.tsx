@@ -14,6 +14,8 @@ function randomCode(): string {
 export function CreateRoomForm({ examId }: { examId: string }) {
   const router = useRouter();
   const [requireFullscreen, setRequireFullscreen] = useState(true);
+  const [maxAttempts, setMaxAttempts] = useState(1);
+  const [violationKickLimit, setViolationKickLimit] = useState(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -25,6 +27,8 @@ export function CreateRoomForm({ examId }: { examId: string }) {
       exam_id: examId,
       code: randomCode(),
       require_fullscreen: requireFullscreen,
+      max_attempts: Math.max(1, maxAttempts),
+      violation_kick_limit: Math.max(1, violationKickLimit),
       is_active: true,
     });
     setBusy(false);
@@ -45,6 +49,28 @@ export function CreateRoomForm({ examId }: { examId: string }) {
         />
         Bắt buộc toàn màn hình + ghi log vi phạm (khuyến nghị)
       </label>
+      <div className="mb-3 flex flex-wrap gap-4">
+        <label className="flex items-center gap-2 text-sm">
+          Số lần làm bài tối đa
+          <input
+            type="number"
+            min={1}
+            value={maxAttempts}
+            onChange={(e) => setMaxAttempts(Number(e.target.value))}
+            className="w-16 rounded border px-2 py-1"
+          />
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          Số vi phạm thì tự động đuổi khỏi phòng
+          <input
+            type="number"
+            min={1}
+            value={violationKickLimit}
+            onChange={(e) => setViolationKickLimit(Number(e.target.value))}
+            className="w-16 rounded border px-2 py-1"
+          />
+        </label>
+      </div>
       {error && <p className="mb-2 text-sm text-red-600">{error}</p>}
       <button
         onClick={handleCreate}

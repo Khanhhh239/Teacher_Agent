@@ -38,10 +38,15 @@ export function ExamPreviewModal({
           </div>
 
           <div className="space-y-4">
-            {questions.map((q, idx) => (
-              <div key={q.id} className="rounded-lg border p-4">
-                <p className="mb-3 font-medium">
-                  Câu {idx + 1}. <LatexText text={q.content_latex} />
+            {questions.map((q, idx) => {
+              const prevPart = idx > 0 ? questions[idx - 1].part_label : null;
+              const showPartHeader = q.part_label && q.part_label !== prevPart;
+              return (
+              <div key={q.id}>
+                {showPartHeader && <h2 className="mb-2 mt-2 font-bold">{q.part_label}</h2>}
+                <div className="rounded-lg border p-4">
+                <p className="mb-3">
+                  <span className="font-bold">Câu {idx + 1}.</span> <LatexText text={q.content_latex} />
                 </p>
                 {q.image_urls.length > 0 && (
                   <div className="mb-3 flex flex-wrap gap-2">
@@ -77,8 +82,10 @@ export function ExamPreviewModal({
                     Học sinh nhập đáp án tại đây
                   </div>
                 )}
+                </div>
               </div>
-            ))}
+              );
+            })}
             {!questions.length && (
               <p className="rounded-lg border border-dashed p-8 text-center text-sm text-slate-500">
                 Đề thi chưa có câu hỏi nào.

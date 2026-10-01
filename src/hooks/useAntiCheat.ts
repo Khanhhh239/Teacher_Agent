@@ -9,7 +9,12 @@ import type { ViolationType } from "@/types/exam";
  * người rành kỹ thuật (vẫn có thể mở DevTools qua menu trình duyệt hoặc userscript) — mục
  * đích là giảm thiểu gian lận thông thường + cung cấp bằng chứng cho giáo viên xem lại.
  */
-export function useAntiCheat(sessionId: string, enabled: boolean, requireFullscreen: boolean) {
+export function useAntiCheat(
+  sessionId: string,
+  enabled: boolean,
+  requireFullscreen: boolean,
+  onKicked?: () => void
+) {
   const violationCountRef = useRef(0);
 
   useEffect(() => {
@@ -22,7 +27,12 @@ export function useAntiCheat(sessionId: string, enabled: boolean, requireFullscr
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type, meta }),
         keepalive: true,
-      }).catch(() => {});
+      })
+        .then((r) => r.json())
+        .then((d) => {
+          if (d?.kicked) onKicked?.();
+        })
+        .catch(() => {});
     }
 
     function handleVisibilityChange() {
@@ -85,5 +95,5 @@ export function useAntiCheat(sessionId: string, enabled: boolean, requireFullscr
       document.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
-  }, [sessionId, enabled, requireFullscreen]);
+  }, [sessionId, enabled, requireFullscreen, onKicked]);
 }
