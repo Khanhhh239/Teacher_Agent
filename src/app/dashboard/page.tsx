@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
+import { DeleteExamButton } from "@/components/DeleteExamButton";
 import type { Exam } from "@/types/exam";
 
 const statusLabel: Record<string, string> = {
@@ -31,21 +32,23 @@ export default async function DashboardPage() {
       <div className="space-y-2">
         {(exams as Exam[] | null)?.length ? (
           (exams as Exam[]).map((exam) => (
-            <Link
+            <div
               key={exam.id}
-              href={`/dashboard/exams/${exam.id}`}
               className="flex items-center justify-between rounded-lg border bg-white p-4 hover:bg-slate-50"
             >
-              <div>
+              <Link href={`/dashboard/exams/${exam.id}`} className="min-w-0 flex-1">
                 <p className="font-medium">{exam.title}</p>
                 <p className="text-sm text-slate-500">
                   {exam.subject || "Chưa rõ môn"} · {exam.duration_minutes} phút
                 </p>
+              </Link>
+              <div className="flex items-center gap-2">
+                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium">
+                  {statusLabel[exam.status] ?? exam.status}
+                </span>
+                <DeleteExamButton examId={exam.id} examTitle={exam.title} />
               </div>
-              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium">
-                {statusLabel[exam.status] ?? exam.status}
-              </span>
-            </Link>
+            </div>
           ))
         ) : (
           <p className="rounded-lg border border-dashed p-8 text-center text-sm text-slate-500">
