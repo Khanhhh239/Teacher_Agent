@@ -49,6 +49,8 @@ function textOfRun(r: Element): string {
 
 const ACCENT_LATEX: Record<string, string> = {
   "\u2192": "vec",
+  "\u20d7": "vec", // COMBINING RIGHT ARROW ABOVE \u2014 m\u00e3 th\u1ef1c t\u1ebf Word/MathType d\u00f9ng cho vect\u01a1 (m:chr trong OMML), kh\u00f4ng ph\u1ea3i U+2192
+  "\u203e": "overline", // OVERLINE \u2014 d\u00f9ng cho \u0111o\u1ea1n th\u1eb3ng/gi\u00e1 tr\u1ecb trung b\u00ecnh, tr\u01b0\u1edbc \u0111\u00e2y b\u1ecb fallback nh\u1ea7m th\u00e0nh vec
   "\u0302": "hat",
   "\u0303": "tilde",
   "\u0304": "bar",
@@ -141,8 +143,17 @@ function convertNode(el: Element): string {
       const chrVal = accPr ? attrVal(accPr, "chr") : null;
       const base = first(el, "e");
       const baseText = base ? convertChildren(base) : "";
-      const cmd = (chrVal && ACCENT_LATEX[chrVal]) || "vec";
-      return `\\${cmd}{${baseText}}`;
+      // Theo spec OOXML, khi <m:acc> không có m:chr (Word bỏ qua khi dùng mẫu accent mặc định
+      // trong gallery công thức), ký tự mặc định là circumflex (hat) — ví dụ điển hình: ký hiệu
+      // góc "ABC" ($\widehat{ABC}$) không set m:chr vì hat là default, TRƯỚC ĐÂY bị fallback
+      // nhầm thành "vec" khiến góc hiển thị thành vectơ. "vec" chỉ nên áp dụng khi m:chr khớp
+      // rõ ràng trong ACCENT_LATEX (ví dụ U+20D7).
+      const cmd = (chrVal && ACCENT_LATEX[chrVal]) || "hat";
+      // \hat chỉ đẹp với 1 ký tự; accent phủ nhiều ký tự (vd "ABC") cần \widehat để co giãn
+      // đúng bề rộng — áp dụng cho mọi loại accent có base nhiều ký tự, trừ vec (vectơ nhiều
+      // chữ như $\vec{BA}$ vẫn dùng \vec bình thường theo quy ước đề thi).
+      const wideCmd = cmd === "hat" && baseText.length > 1 ? "widehat" : cmd;
+      return `\\${wideCmd}{${baseText}}`;
     }
     case "bar": {
       const barPr = first(el, "barPr");
