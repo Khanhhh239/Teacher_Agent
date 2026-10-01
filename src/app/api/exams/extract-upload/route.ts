@@ -73,17 +73,18 @@ export async function POST(request: Request) {
 
   for (let i = 0; i < extracted.questions.length; i++) {
     const q = extracted.questions[i];
-    let imageUrl: string | null = null;
+    const imageUrls: string[] = [];
 
-    if (q.image_url && docxImages?.has(q.image_url)) {
-      const imgBuffer = docxImages.get(q.image_url)!;
-      const path = `${exam.id}/${crypto.randomUUID()}-${q.image_url}`;
+    for (const localName of q.image_urls) {
+      if (!docxImages?.has(localName)) continue;
+      const imgBuffer = docxImages.get(localName)!;
+      const path = `${exam.id}/${crypto.randomUUID()}-${localName}`;
       const { error: uploadError } = await supabase.storage.from("exam-images").upload(path, imgBuffer, {
-        contentType: `image/${q.image_url.split(".").pop()}`,
+        contentType: `image/${localName.split(".").pop()}`,
       });
       if (!uploadError) {
         const { data: pub } = supabase.storage.from("exam-images").getPublicUrl(path);
-        imageUrl = pub.publicUrl;
+        imageUrls.push(pub.publicUrl);
       }
     }
 
@@ -92,7 +93,7 @@ export async function POST(request: Request) {
       order_index: i,
       type: q.type,
       content_latex: q.content_latex,
-      image_url: imageUrl,
+      image_urls: imageUrls,
       options: q.options,
       sub_statements: q.sub_statements,
       correct_answer: q.correct_answer,

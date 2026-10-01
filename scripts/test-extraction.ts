@@ -24,8 +24,8 @@ async function main() {
   console.log("Question count:", normalized.questions.length);
   const mc = normalized.questions.filter((q) => q.type === "multiple_choice");
   console.log("MC correct answers:", mc.map((q) => q.correct_answer).join(","));
-  const withImages = normalized.questions.filter((q) => q.image_url);
-  console.log("Questions with image_url set:", withImages.map((q) => q.image_url));
+  const withImages = normalized.questions.filter((q) => q.image_urls.length > 0);
+  console.log("Questions with image_urls set:", withImages.map((q) => q.image_urls));
 }
 
 main().catch((e) => {

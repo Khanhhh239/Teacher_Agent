@@ -26,7 +26,7 @@ Schema JSON trả về:
     {
       "type": "multiple_choice" | "true_false_group" | "short_answer",
       "content_latex": "nội dung câu hỏi, công thức toán bọc trong $...$",
-      "image_url": null,
+      "image_urls": [],
       "options": [{"key": "A", "text_latex": "..."}],
       "sub_statements": [{"key": "a", "text_latex": "...", "answer": true}],
       "correct_answer": "A hoặc null",
@@ -43,7 +43,11 @@ Quy tắc phân loại và điểm mặc định theo cấu trúc đề THPT Vi�
 - "true_false_group": 4 mệnh đề con a/b/c/d, mỗi mệnh đề Đúng/Sai độc lập. max_score mặc định 1.0, score_rule "thpt2025_truefalse_partial".
 - "short_answer": điền một giá trị số/chuỗi ngắn. max_score mặc định 0.5, score_rule "standard".
 
-Nếu có đáp án/lời giải đi kèm, dùng để điền correct_answer / sub_statements[].answer / short_answer_normalized. Nếu KHÔNG chắc chắn, để null và ghi rõ lý do vào raw_ocr_notes — TUYỆT ĐỐI không bịa đáp án. Nếu gặp marker dạng "[IMAGE:tên_file]" trong văn bản, gán chuỗi tên_file đó (không có ngoặc) vào "image_url" của câu hỏi tương ứng, đồng thời XOÁ hẳn marker "[IMAGE:...]" đó khỏi content_latex (không để sót lại trong văn bản hiển thị cho học sinh). Nếu gặp marker ngắn dạng "[CT?N]" (N là số), GIỮ NGUYÊN marker đó đúng y hệt tại vị trí xuất hiện trong content_latex hoặc text_latex (không viết lại, không mở rộng thành câu dài) — đây là công thức MathType cũ hệ thống chưa OCR được, chỉ cần đặt raw_ocr_notes = "Có công thức cần giáo viên nhập tay (đánh dấu [CT?N] trong nội dung)." một lần duy nhất cho câu hỏi đó, không lặp lại giải thích dài trong content_latex.
+Nếu có đáp án/lời giải đi kèm, dùng để điền correct_answer / sub_statements[].answer / short_answer_normalized. Nếu KHÔNG chắc chắn, để null và ghi rõ lý do vào raw_ocr_notes — TUYỆT ĐỐI không bịa đáp án.
+
+Xử lý marker trong văn bản (BẮT BUỘC xóa hết các marker này khỏi content_latex sau khi xử lý — không bao giờ để sót nguyên văn "[IMAGE:...]" hay "\n" thừa trong nội dung hiển thị cho học sinh):
+- "[IMAGE:tên_file]": thêm chuỗi tên_file đó (không có ngoặc) vào mảng "image_urls" của câu hỏi tương ứng. MỘT câu hỏi có thể có NHIỀU marker [IMAGE:...] liên tiếp (vd 2-3 hình minh họa cho cùng 1 câu) — khi đó thêm TẤT CẢ các tên_file đó vào "image_urls" theo đúng thứ tự xuất hiện, không được bỏ sót ảnh nào và không được để sót marker nào lại trong content_latex.
+- "[CT?N]" (N là số): đây là công thức MathType cũ hệ thống chưa OCR được — GIỮ NGUYÊN marker này y hệt tại vị trí xuất hiện trong content_latex hoặc text_latex (không viết lại, không xóa, không mở rộng thành câu dài). Chỉ cần đặt raw_ocr_notes = "Có công thức cần giáo viên nhập tay (đánh dấu [CT?N] trong nội dung)." một lần duy nhất cho câu hỏi đó.
 
 Chỉ trả về JSON hợp lệ, không markdown, không code fence.`;
 
@@ -56,7 +60,7 @@ const PDF_PROMPT = `Bạn là trợ lý số hóa đề thi tiếng Việt. Đ�
     {
       "type": "multiple_choice" | "true_false_group" | "short_answer",
       "content_latex": "nội dung câu hỏi, công thức toán bọc trong $...$",
-      "image_url": null,
+      "image_urls": [],
       "options": [{"key": "A", "text_latex": "..."}],
       "sub_statements": [{"key": "a", "text_latex": "...", "answer": true}],
       "correct_answer": "A hoặc null nếu trang PDF không có đáp án kèm theo",

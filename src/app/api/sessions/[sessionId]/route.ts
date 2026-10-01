@@ -35,7 +35,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ ses
         id: q.id,
         type: q.type,
         content_latex: q.content_latex,
-        image_url: q.image_url,
+        image_urls: q.image_urls,
         options,
         sub_statements: q.sub_statements.map((s) => ({ key: s.key, text_latex: s.text_latex })),
         max_score: q.max_score,

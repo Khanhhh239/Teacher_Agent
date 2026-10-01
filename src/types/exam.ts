@@ -18,7 +18,7 @@ export interface Question {
   order_index: number;
   type: QuestionType;
   content_latex: string;
-  image_url: string | null;
+  image_urls: string[];
   options: QuestionOption[];
   sub_statements: SubStatement[];
   correct_answer: string | null;
@@ -116,7 +116,7 @@ export interface ExtractedExam {
   questions: Array<{
     type: QuestionType;
     content_latex: string;
-    image_url: string | null;
+    image_urls: string[];
     options: QuestionOption[];
     sub_statements: SubStatement[];
     correct_answer: string | null;

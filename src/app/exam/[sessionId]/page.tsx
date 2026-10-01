@@ -10,7 +10,7 @@ interface ExamQuestion {
   id: string;
   type: "multiple_choice" | "true_false_group" | "short_answer";
   content_latex: string;
-  image_url: string | null;
+  image_urls: string[];
   options: { key: string; text_latex: string }[];
   sub_statements: { key: string; text_latex: string }[];
   max_score: number;
@@ -118,9 +118,13 @@ export default function TakeExamPage({ params }: { params: Promise<{ sessionId: 
             <p className="mb-3 font-medium">
               Câu {idx + 1}. <LatexText text={q.content_latex} />
             </p>
-            {q.image_url && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={q.image_url} alt="" className="mb-3 max-h-72 rounded border" />
+            {q.image_urls.length > 0 && (
+              <div className="mb-3 flex flex-wrap gap-2">
+                {q.image_urls.map((url, i) => (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img key={i} src={url} alt="" className="max-h-72 rounded border" />
+                ))}
+              </div>
             )}
 
             {q.type === "multiple_choice" && (

@@ -72,9 +72,13 @@ export function QuestionEditor({ question }: { question: Question }) {
       </div>
 
       {/* Ảnh minh họa luôn hiển thị (cả khi đang sửa) — giáo viên cần đối chiếu nội dung với ảnh gốc */}
-      {q.image_url && (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={q.image_url} alt="" className="mb-3 max-h-72 rounded-md border" />
+      {q.image_urls.length > 0 && (
+        <div className="mb-3 flex flex-wrap gap-2">
+          {q.image_urls.map((url, i) => (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img key={i} src={url} alt="" className="max-h-72 rounded-md border" />
+          ))}
+        </div>
       )}
 
       {!editing ? (
