@@ -60,8 +60,20 @@ function extractPartLabel(text: string): { partLabel: string | null; rest: strin
   return { partLabel, rest };
 }
 
+/**
+ * Đề thi hay liệt kê điều kiện bằng gạch đầu dòng "+ ..." hoặc "- ..." ngay sau dấu
+ * ":"/";" (vd "...thỏa mãn: + Điều kiện 1; + Điều kiện 2."), nhưng LLM thường không chèn
+ * xuống dòng thật trước mỗi gạch đầu dòng — tất cả dính liền 1 đoạn văn khó đọc. Chèn
+ * xuống dòng trước "+ "/"- " khi nó đứng ngay sau dấu câu kết thúc mệnh đề trước (: hoặc ;)
+ * và theo sau là chữ hoa — tránh nhầm với phép cộng/trừ trong công thức toán (vd "2 + 3",
+ * vốn không đứng sau dấu : hoặc ; và chữ theo sau thường là số/biến thường).
+ */
+function insertBulletLineBreaks(text: string): string {
+  return text.replace(/([:;])\s*([+\-])\s+(?=[A-ZÀ-Ỹ])/g, "$1\n$2 ");
+}
+
 function stripImageMarkers(text: string): string {
-  return normalizeLiteralNewlines(fixVecGlyph(fixAccentOverScript(text)))
+  return insertBulletLineBreaks(normalizeLiteralNewlines(fixVecGlyph(fixAccentOverScript(text))))
     .replace(/\[IMAGE:[^\]]*\]/g, "")
     .replace(/[ \t]+/g, " ")
     .replace(/[ \t]*\n[ \t]*/g, "\n")

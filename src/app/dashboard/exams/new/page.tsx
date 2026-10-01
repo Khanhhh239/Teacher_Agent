@@ -3,32 +3,96 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
+const ACCEPTED_EXTS = ["docx", "pdf", "jpg", "jpeg", "png", "webp"];
+
+function extOf(filename: string): string {
+  return filename.split(".").pop()?.toLowerCase() ?? "";
+}
+
+function Dropzone({
+  label,
+  hint,
+  file,
+  onPick,
+}: {
+  label: string;
+  hint: string;
+  file: File | null;
+  onPick: (f: File | null) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [dragOver, setDragOver] = useState(false);
+
+  return (
+    <div>
+      <p className="mb-1.5 text-sm font-medium text-slate-700">{label}</p>
+      <div
+        onClick={() => inputRef.current?.click()}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          onPick(e.dataTransfer.files?.[0] ?? null);
+        }}
+        className={`flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border-2 border-dashed p-6 text-center transition-colors ${
+          dragOver ? "border-slate-900 bg-slate-50" : "border-slate-300 hover:border-slate-400"
+        }`}
+      >
+        <svg className="h-8 w-8 text-slate-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M12 16.5V9.75m0 0 3 3m-3-3-3 3M6.75 19.5a4.5 4.5 0 0 1-1.41-8.775 5.25 5.25 0 0 1 10.233-2.33 3 3 0 0 1 3.758 3.848A3.752 3.752 0 0 1 18 19.5H6.75Z"
+          />
+        </svg>
+        {file ? (
+          <p className="text-sm font-medium text-slate-900">{file.name}</p>
+        ) : (
+          <>
+            <p className="text-sm font-medium text-slate-700">Kéo thả vào đây, hoặc bấm để chọn</p>
+            <p className="text-xs text-slate-500">{hint}</p>
+          </>
+        )}
+        <input
+          ref={inputRef}
+          type="file"
+          accept=".docx,.pdf,.jpg,.jpeg,.png,.webp"
+          className="hidden"
+          onChange={(e) => onPick(e.target.files?.[0] ?? null)}
+        />
+      </div>
+    </div>
+  );
+}
+
 export default function NewExamPage() {
   const router = useRouter();
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
-  const [dragOver, setDragOver] = useState(false);
+  const [answerFile, setAnswerFile] = useState<File | null>(null);
   const [subject, setSubject] = useState("");
   const [duration, setDuration] = useState(90);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
 
-  function pickFile(f: File | null) {
+  function pickFile(setter: (f: File | null) => void, f: File | null) {
     if (!f) return;
-    const ext = f.name.split(".").pop()?.toLowerCase();
-    if (ext !== "docx" && ext !== "pdf") {
-      setError("Chỉ chấp nhận file .docx hoặc .pdf");
+    if (!ACCEPTED_EXTS.includes(extOf(f.name))) {
+      setError("Chỉ chấp nhận file .docx, .pdf hoặc ảnh (.jpg/.png/.webp)");
       return;
     }
     setError(null);
-    setFile(f);
+    setter(f);
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!file) {
-      setError("Vui lòng chọn file đề thi (.docx hoặc .pdf)");
+    if (!file || !answerFile) {
+      setError("Vui lòng chọn cả file đề thi và file đáp án.");
       return;
     }
     setBusy(true);
@@ -38,6 +102,7 @@ export default function NewExamPage() {
     try {
       const formData = new FormData();
       formData.append("file", file);
+      formData.append("answer_file", answerFile);
       formData.append("duration_minutes", String(duration));
 
       const res = await fetch("/api/exams/extract-upload", { method: "POST", body: formData });
@@ -62,7 +127,7 @@ export default function NewExamPage() {
       <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4">
         <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-slate-900" />
         <p className="text-slate-600">
-          Đang đọc và trích xuất đề thi (30–60 giây tuỳ độ dài file)...
+          Đang đọc đề thi và đáp án, ghép đáp án vào từng câu (có thể mất 1-2 phút)...
         </p>
       </div>
     );
@@ -73,51 +138,24 @@ export default function NewExamPage() {
       <h1 className="mb-4 text-lg font-semibold">Tạo đề thi mới</h1>
 
       <form onSubmit={handleSubmit} className="space-y-4 rounded-lg border bg-white p-5">
-        <div
-          onClick={() => fileInputRef.current?.click()}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragOver(true);
-          }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setDragOver(false);
-            pickFile(e.dataTransfer.files?.[0] ?? null);
-          }}
-          className={`flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-10 text-center transition-colors ${
-            dragOver ? "border-slate-900 bg-slate-50" : "border-slate-300 hover:border-slate-400"
-          }`}
-        >
-          <svg
-            className="h-10 w-10 text-slate-400"
-            fill="none"
-            viewBox="0 0 24 24"
-            strokeWidth={1.5}
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M12 16.5V9.75m0 0 3 3m-3-3-3 3M6.75 19.5a4.5 4.5 0 0 1-1.41-8.775 5.25 5.25 0 0 1 10.233-2.33 3 3 0 0 1 3.758 3.848A3.752 3.752 0 0 1 18 19.5H6.75Z"
-            />
-          </svg>
-          {file ? (
-            <p className="font-medium text-slate-900">{file.name}</p>
-          ) : (
-            <>
-              <p className="font-medium text-slate-700">Kéo thả file vào đây, hoặc bấm để chọn</p>
-              <p className="text-sm text-slate-500">Hỗ trợ file .docx hoặc .pdf (đề thi + đáp án)</p>
-            </>
-          )}
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".docx,.pdf"
-            className="hidden"
-            onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Dropzone
+            label="1. File đề thi"
+            hint=".docx, .pdf hoặc ảnh chụp"
+            file={file}
+            onPick={(f) => pickFile(setFile, f)}
+          />
+          <Dropzone
+            label="2. File đáp án"
+            hint=".docx, .pdf hoặc ảnh chụp"
+            file={answerFile}
+            onPick={(f) => pickFile(setAnswerFile, f)}
           />
         </div>
+        <p className="text-xs text-slate-500">
+          Cần upload cả 2 file — hệ thống sẽ tự đọc đáp án và điền sẵn vào từng câu (đánh dấu màu đỏ), bạn chỉ cần kiểm
+          tra lại và sửa nếu AI đọc sai.
+        </p>
 
         <div className="grid grid-cols-2 gap-3">
           <div>
@@ -151,10 +189,10 @@ export default function NewExamPage() {
 
         <button
           type="submit"
-          disabled={!file}
+          disabled={!file || !answerFile}
           className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
         >
-          Tải lên & trích xuất
+          Tiếp tục
         </button>
       </form>
     </div>

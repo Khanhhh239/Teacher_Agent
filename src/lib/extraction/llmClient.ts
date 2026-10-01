@@ -47,6 +47,8 @@ QUAN TRỌNG — KHÔNG được lặp nội dung: "content_latex" CHỈ chứa 
 
 Nếu đề bài có bảng số liệu (vd bảng tần số ghép nhóm), trình bày bằng cú pháp Markdown table ngay trong content_latex, ví dụ: "| Nhóm | [0;40) | [40;80) |\n| --- | --- | --- |\n| Tần số | 11 | 10 |". TUYỆT ĐỐI KHÔNG dùng \\begin{tabular}...\\end{tabular} hay bất kỳ cú pháp LaTeX bảng nào khác — hệ thống hiển thị bằng KaTeX, không render được môi trường bảng LaTeX, chỉ render được công thức toán đơn lẻ trong $...$ và bảng Markdown.
 
+Nếu đề bài liệt kê các điều kiện/ý bằng gạch đầu dòng "+", "-", "•" (ví dụ: "...thỏa mãn đồng thời: + Điều kiện 1; + Điều kiện 2."), PHẢI chèn ký tự xuống dòng thật "\n" trước MỖI gạch đầu dòng để mỗi ý nằm riêng 1 dòng — không được viết dính liền thành 1 đoạn văn.
+
 Nếu có đáp án/lời giải đi kèm, dùng để điền correct_answer / sub_statements[].answer / short_answer_normalized. Nếu KHÔNG chắc chắn, để null và ghi rõ lý do vào raw_ocr_notes — TUYỆT ĐỐI không bịa đáp án.
 
 Xử lý marker trong văn bản (BẮT BUỘC xóa hết các marker này khỏi content_latex sau khi xử lý — không bao giờ để sót nguyên văn "[IMAGE:...]" hay "\n" thừa trong nội dung hiển thị cho học sinh):
@@ -92,6 +94,7 @@ Quy tắc:
 - "figure_refs": mảng id các hình (từ "figures") thuộc về câu hỏi này, theo đúng thứ tự xuất hiện. Một câu có thể có 0, 1 hoặc nhiều hình. Để mảng rỗng [] nếu câu không có hình.
 - Nếu có đáp án/lời giải trên trang này, dùng để điền đáp án đúng. Nếu không, để null, TUYỆT ĐỐI không bịa.
 - Nếu trang có bảng số liệu, trình bày bằng cú pháp Markdown table trong content_latex (vd: "| Nhóm | [0;40) |\n| --- | --- |\n| Tần số | 11 |"). TUYỆT ĐỐI KHÔNG dùng \\begin{tabular}...\\end{tabular} — hệ thống không render được bảng LaTeX.
+- Nếu đề liệt kê điều kiện bằng gạch đầu dòng "+"/"-"/"•" (vd "...thỏa mãn: + Điều kiện 1; + Điều kiện 2."), chèn ký tự xuống dòng thật "\n" trước MỖI gạch đầu dòng, không viết dính liền 1 đoạn.
 {continuationRule}
 Chỉ trả JSON hợp lệ, không markdown, không code fence.`;
 
@@ -256,9 +259,9 @@ async function callGeminiText(prompt: string): Promise<string> {
   return callGeminiRaw(GEMINI_MODEL_TEXT, [{ text: prompt }]);
 }
 
-async function callGeminiWithImage(imageBase64: string, prompt: string): Promise<string> {
+async function callGeminiWithImage(imageBase64: string, prompt: string, mimeType = "image/png"): Promise<string> {
   return callGeminiRaw(GEMINI_MODEL_VISION, [
-    { inline_data: { mime_type: "image/png", data: imageBase64 } },
+    { inline_data: { mime_type: mimeType, data: imageBase64 } },
     { text: prompt },
   ]);
 }
@@ -303,6 +306,101 @@ export async function structureExamText(rawText: string): Promise<ExtractedExam>
     }
     throw e;
   }
+}
+
+/**
+ * Đáp án đọc được từ file đáp án RIÊNG (đề và đáp án là 2 file khác nhau, giáo viên upload
+ * cả 2 — xem giải thích luồng upload mới trong route extract-upload). "question_number" là
+ * số thứ tự câu hỏi NHƯ TRONG FILE ĐÁP ÁN (1, 2, 3...), dùng để ghép với câu hỏi đã trích
+ * xuất từ file đề theo đúng order_index (question_number - 1), giả định đề đánh số tuần tự.
+ */
+export interface AnswerKeyEntry {
+  question_number: number;
+  type: "multiple_choice" | "true_false_group" | "short_answer";
+  correct_answer?: string | null;
+  sub_statements?: { key: string; answer: boolean }[];
+  value?: string | null;
+}
+
+const ANSWER_KEY_PROMPT = `Bạn là trợ lý đọc đáp án đề thi tiếng Việt. Nội dung/ảnh đính kèm là FILE ĐÁP ÁN (không phải đề thi) — có thể là bảng đáp án ngắn gọn (vd "1-A 2-C 3-D...", hoặc bảng Đúng/Sai từng ý a/b/c/d) hoặc lời giải chi tiết từng câu. Đọc và trả về DUY NHẤT 1 JSON theo schema:
+{
+  "answers": [
+    {"question_number": 1, "type": "multiple_choice", "correct_answer": "A"},
+    {"question_number": 13, "type": "true_false_group", "sub_statements": [{"key": "a", "answer": true}, {"key": "b", "answer": false}, {"key": "c", "answer": true}, {"key": "d", "answer": false}]},
+    {"question_number": 17, "type": "short_answer", "value": "145"}
+  ]
+}
+Quy tắc:
+- "question_number": số thứ tự câu hỏi đúng như trong file đáp án (đếm liên tục 1, 2, 3... theo thứ tự xuất hiện, không reset theo từng phần).
+- Trắc nghiệm A/B/C/D: type "multiple_choice", "correct_answer" là 1 chữ cái in hoa.
+- Đúng/Sai 4 ý a/b/c/d: type "true_false_group", "sub_statements" PHẢI đủ 4 phần tử đúng thứ tự a,b,c,d.
+- Tự luận/điền số: type "short_answer", "value" là đáp án dạng chuỗi (giữ nguyên định dạng số, vd "12.5" hoặc "1234").
+- Nếu không đọc được đáp án của một câu nào đó, bỏ qua câu đó hoàn toàn (không bịa đáp án).
+Chỉ trả JSON hợp lệ, không markdown, không code fence.`;
+
+function parseAnswerKeyResponse(text: string): AnswerKeyEntry[] {
+  const data = extractJson(text) as { answers?: AnswerKeyEntry[] };
+  return data.answers ?? [];
+}
+
+/** Đọc đáp án từ nội dung text thuần (file đáp án dạng .docx) — 1 lần gọi Gemini duy nhất. */
+export async function extractAnswerKeyFromText(rawText: string): Promise<AnswerKeyEntry[]> {
+  const prompt = ANSWER_KEY_PROMPT + "\n\nNội dung file đáp án:\n---\n" + rawText + "\n---";
+  return parseAnswerKeyResponse(await callGeminiText(prompt));
+}
+
+/** Đọc đáp án từ 1 ảnh (file đáp án dạng ảnh chụp, hoặc từng trang PDF đã render) — 1 lần
+ * gọi Gemini vision / ảnh. */
+export async function extractAnswerKeyFromImage(imageBase64: string, mimeType = "image/png"): Promise<AnswerKeyEntry[]> {
+  return parseAnswerKeyResponse(await callGeminiWithImage(imageBase64, ANSWER_KEY_PROMPT, mimeType));
+}
+
+/** File đáp án dạng PDF nhiều trang — render từng trang rồi gọi Gemini vision riêng cho mỗi
+ * trang (giống extractPdfPages nhưng không cần OCR câu hỏi/hình ảnh, chỉ cần đáp án nên
+ * không dùng ngữ cảnh nối trang). Số lần gọi Gemini = số trang PDF đáp án. */
+export async function extractAnswerKeyFromPdf(buffer: Buffer): Promise<AnswerKeyEntry[]> {
+  const { renderPdfPages } = await import("./pdfRender");
+  const pages = renderPdfPages(buffer);
+  const all: AnswerKeyEntry[] = [];
+  for (const page of pages) {
+    const entries = await extractAnswerKeyFromImage(page.toString("base64"));
+    all.push(...entries);
+  }
+  return all;
+}
+
+/**
+ * Ghép đáp án đọc được từ file đáp án riêng vào danh sách câu hỏi đã trích xuất từ file đề
+ * — match theo question_number (1-based trong file đáp án) với order_index (0-based) của
+ * câu hỏi. Câu nào không có đáp án khớp thì giữ nguyên null/false mặc định (giáo viên tự
+ * điền tay ở bước duyệt). KHÔNG gọi thêm Gemini — chỉ là object merge thuần JS.
+ */
+export function mergeAnswerKeyIntoQuestions(
+  questions: ExtractedExam["questions"],
+  answerKey: AnswerKeyEntry[]
+): ExtractedExam["questions"] {
+  const byNumber = new Map(answerKey.map((a) => [a.question_number, a]));
+  return questions.map((q, idx) => {
+    const entry = byNumber.get(idx + 1);
+    if (!entry) return q;
+    if (q.type === "multiple_choice" && entry.correct_answer) {
+      return { ...q, correct_answer: entry.correct_answer };
+    }
+    if (q.type === "true_false_group" && entry.sub_statements?.length) {
+      const answerByKey = new Map(entry.sub_statements.map((s) => [s.key, s.answer]));
+      return {
+        ...q,
+        sub_statements: q.sub_statements.map((s) => ({
+          ...s,
+          answer: answerByKey.has(s.key) ? answerByKey.get(s.key)! : s.answer,
+        })),
+      };
+    }
+    if (q.type === "short_answer" && entry.value) {
+      return { ...q, short_answer_normalized: entry.value };
+    }
+    return q;
+  });
 }
 
 interface PdfPageResult {
@@ -352,9 +450,22 @@ export async function extractPdfPages(
   pdfBuffer: Buffer
 ): Promise<{ extracted: ExtractedExam; images: Map<string, Buffer> }> {
   const { renderPdfPages } = await import("./pdfRender");
+  return extractImagePages(renderPdfPages(pdfBuffer, 200));
+}
+
+/** Đề thi dạng 1 ảnh chụp duy nhất (jpg/png) — xử lý như PDF 1 trang, dùng chung pipeline
+ * OCR + crop hình với extractPdfPages. */
+export async function extractExamFromImage(
+  imageBuffer: Buffer
+): Promise<{ extracted: ExtractedExam; images: Map<string, Buffer> }> {
+  return extractImagePages([imageBuffer]);
+}
+
+async function extractImagePages(
+  pagePngs: Buffer[]
+): Promise<{ extracted: ExtractedExam; images: Map<string, Buffer> }> {
   const sharp = (await import("sharp")).default;
 
-  const pagePngs = renderPdfPages(pdfBuffer, 200);
   const images = new Map<string, Buffer>();
   const allQuestions: ExtractedExam["questions"] = [];
   let title: string | null = null;

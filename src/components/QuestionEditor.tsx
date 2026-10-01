@@ -114,12 +114,21 @@ export function QuestionEditor({ question }: { question: Question }) {
           <p className="mb-3 text-[15px] leading-relaxed">
             <LatexText text={q.content_latex} />
           </p>
+          {q.needs_review && (
+            <p className="mb-2 text-xs font-medium text-red-600">⚠ Đáp án do AI đề xuất — chưa xác nhận.</p>
+          )}
           {q.type === "multiple_choice" && (
             <ul className="ml-1 space-y-1.5 text-sm">
               {q.options.map((o) => (
                 <li
                   key={o.key}
-                  className={`rounded-md px-2 py-1 ${o.key === q.correct_answer ? "bg-green-50 font-semibold text-green-700" : ""}`}
+                  className={`rounded-md px-2 py-1 ${
+                    o.key === q.correct_answer
+                      ? q.needs_review
+                        ? "bg-red-50 font-semibold text-red-700"
+                        : "bg-green-50 font-semibold text-green-700"
+                      : ""
+                  }`}
                 >
                   {o.key}. <LatexText text={o.text_latex} />
                 </li>
@@ -131,7 +140,11 @@ export function QuestionEditor({ question }: { question: Question }) {
               {q.sub_statements.map((s) => (
                 <li key={s.key} className="rounded-md px-2 py-1">
                   {s.key}) <LatexText text={s.text_latex} /> —{" "}
-                  <span className={s.answer ? "font-semibold text-green-700" : "font-semibold text-red-700"}>
+                  <span
+                    className={`font-semibold ${
+                      q.needs_review ? "text-red-700" : s.answer ? "text-green-700" : "text-red-700"
+                    }`}
+                  >
                     {s.answer ? "Đúng" : "Sai"}
                   </span>
                 </li>
@@ -140,7 +153,10 @@ export function QuestionEditor({ question }: { question: Question }) {
           )}
           {q.type === "short_answer" && (
             <p className="text-sm">
-              Đáp án: <span className="font-semibold">{q.short_answer_normalized}</span>
+              Đáp án:{" "}
+              <span className={`font-semibold ${q.needs_review ? "text-red-700" : ""}`}>
+                {q.short_answer_normalized}
+              </span>
             </p>
           )}
           {q.raw_ocr_notes && (
@@ -194,9 +210,6 @@ export function QuestionEditor({ question }: { question: Question }) {
                   </div>
                 </div>
               ))}
-              {!q.correct_answer && (
-                <p className="text-xs font-medium text-red-600">⚠ Chưa chọn đáp án đúng cho câu này.</p>
-              )}
             </div>
           )}
 
@@ -272,7 +285,7 @@ export function QuestionEditor({ question }: { question: Question }) {
             disabled={saving}
             className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
           >
-            {saving ? "Đang lưu..." : "Lưu & đánh dấu đã duyệt"}
+            {saving ? "Đang lưu..." : "Xác nhận"}
           </button>
         </div>
       )}

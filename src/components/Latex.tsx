@@ -132,12 +132,16 @@ export function LatexText({ text: rawText }: { text: string }) {
         nodes.push(<Table key={`tbl-${i}`} rows={table.rows} keyPrefix={`tbl-${i}`} />);
         i = table.next;
       } else {
-        nodes.push(<span key={`ln-${i}`}>{renderInlineSegments(lines[i], `ln-${i}`)} </span>);
+        nodes.push(<div key={`ln-${i}`}>{renderInlineSegments(lines[i], `ln-${i}`)}</div>);
         i++;
       }
     }
     return <>{nodes}</>;
   }
 
-  return <>{renderInlineSegments(text, "root")}</>;
+  // white-space: pre-line giữ nguyên các xuống dòng thật trong text (vd danh sách gạch đầu
+  // dòng "+ ...") thành dòng mới hiển thị, đồng thời vẫn gộp khoảng trắng thừa khác — nếu
+  // không có dòng này, mọi ký tự \n trong nội dung chỉ hiện thành 1 khoảng trắng theo mặc
+  // định của HTML, danh sách bị dính liền 1 đoạn dù dữ liệu đã có xuống dòng đúng.
+  return <span style={{ whiteSpace: "pre-line" }}>{renderInlineSegments(text, "root")}</span>;
 }
