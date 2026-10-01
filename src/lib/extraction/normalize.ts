@@ -42,6 +42,16 @@ function fixVecGlyph(text: string): string {
  * "PHẦN..." ra thành part_label riêng (hiển thị 1 lần làm tiêu đề phần, không lặp lại mỗi
  * câu), và xóa hẳn số thứ tự gốc "Câu N:" khỏi nội dung vì không còn đúng sau khi xáo trộn.
  */
+// LLM đôi khi double-escape "\n" thành literal 2 ký tự backslash+n thay vì JSON tự decode
+// thành 1 ký tự xuống dòng thật. Chỉ loại trừ \neq, \nabla (lệnh LaTeX thật bắt đầu bằng
+// "n") — KHÔNG dùng (?![a-zA-Z]) chung chung vì câu tiếng Việt sau xuống dòng luôn viết
+// hoa chữ đầu. PHẢI chạy TRƯỚC extractPartLabel: nếu còn "\n" dạng text thô, regex tách
+// PHẦN dựa vào ký tự xuống dòng THẬT sẽ không tìm thấy ranh giới nào và nuốt luôn toàn bộ
+// phần còn lại của câu hỏi vào part_label, để content_latex rỗng (bug thực tế đã gặp).
+function normalizeLiteralNewlines(text: string): string {
+  return text.replace(/\\n(?!eq|abla)/g, "\n");
+}
+
 function extractPartLabel(text: string): { partLabel: string | null; rest: string } {
   const partMatch = text.match(/^\s*(PHẦN\s+[IVXLC\d]+[^\n]*?)(?:\n+|\s*$)/i);
   const partLabel = partMatch ? partMatch[1].trim() : null;
@@ -51,14 +61,8 @@ function extractPartLabel(text: string): { partLabel: string | null; rest: strin
 }
 
 function stripImageMarkers(text: string): string {
-  return fixVecGlyph(fixAccentOverScript(text))
+  return normalizeLiteralNewlines(fixVecGlyph(fixAccentOverScript(text)))
     .replace(/\[IMAGE:[^\]]*\]/g, "")
-    // LLM đôi khi double-escape "\n" thành literal 2 ký tự backslash+n thay vì JSON tự
-    // decode thành 1 ký tự xuống dòng thật — còn sót lại dạng text thô "\n" hiển thị cho
-    // học sinh (đặc biệt quanh bảng Markdown, nơi \n cần là xuống dòng thật để tách dòng).
-    // Chỉ loại trừ \neq, \nabla (lệnh LaTeX thật bắt đầu bằng "n") — KHÔNG dùng
-    // (?![a-zA-Z]) chung chung vì câu tiếng Việt sau xuống dòng luôn viết hoa chữ đầu.
-    .replace(/\\n(?!eq|abla)/g, "\n")
     .replace(/[ \t]+/g, " ")
     .replace(/[ \t]*\n[ \t]*/g, "\n")
     .replace(/\s+([.,;:])/g, "$1")
@@ -111,7 +115,7 @@ export function normalizeExtractedExam(raw: unknown): ExtractedExam {
   const data = raw as Partial<ExtractedExam> & { questions?: unknown[] };
   const questions = (data.questions ?? []).map((q) => {
     const question = q as Record<string, unknown>;
-    const { partLabel, rest } = extractPartLabel(String(question.content_latex ?? ""));
+    const { partLabel, rest } = extractPartLabel(normalizeLiteralNewlines(String(question.content_latex ?? "")));
     const options = ((question.options as Array<Record<string, unknown>>) ?? []).map((o) => ({
       key: o.key ?? "",
       text_latex: stripImageMarkers(String(o.text_latex ?? "")),
