@@ -169,12 +169,12 @@ function isTransientError(message: string): boolean {
   ].some((s) => m.includes(s));
 }
 
-// flash-lite nhanh & ổn định hơn hẳn cho bước cấu trúc hóa text thuần (đã test thực tế:
-// flash-lite phản hồi ổn định trong vài giây, trong khi flash "đầy đủ" có lúc mất >110s
-// để sinh JSON cho đề 20+ câu, hoặc trả 503 quá tải). PDF vision vẫn cần model "đầy đủ"
-// vì tác vụ đa phương thức (đọc ảnh + chữ + công thức) đòi hỏi năng lực cao hơn.
+// flash-lite nhanh & ổn định hơn hẳn "flash" đầy đủ cho cả 2 tác vụ — đã test thực tế:
+// flash "đầy đủ" có lúc mất >110s để sinh JSON cho đề 20+ câu hoặc trả 503 quá tải liên
+// tục (kể cả cho PDF vision), trong khi flash-lite phản hồi ổn định trong vài giây và vẫn
+// đọc hiểu PDF (text + hình + bố cục) chính xác khi test trực tiếp trên đề mẫu thật.
 const GEMINI_MODEL_TEXT = "gemini-3.5-flash-lite";
-const GEMINI_MODEL_VISION = "gemini-3.5-flash";
+const GEMINI_MODEL_VISION = "gemini-3.5-flash-lite";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
