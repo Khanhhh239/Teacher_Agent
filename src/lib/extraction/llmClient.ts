@@ -43,6 +43,8 @@ Quy tắc phân loại và điểm mặc định theo cấu trúc đề THPT Vi�
 - "true_false_group": 4 mệnh đề con a/b/c/d, mỗi mệnh đề Đúng/Sai độc lập. max_score mặc định 1.0, score_rule "thpt2025_truefalse_partial".
 - "short_answer": điền một giá trị số/chuỗi ngắn. max_score mặc định 0.5, score_rule "standard".
 
+QUAN TRỌNG — KHÔNG được lặp nội dung: "content_latex" CHỈ chứa phần dẫn đề dùng chung (đoạn văn/bài toán trước khi liệt kê lựa chọn), TUYỆT ĐỐI KHÔNG được chép lại các lựa chọn A/B/C/D hay các mệnh đề a)/b)/c)/d) vào trong content_latex — các lựa chọn/mệnh đề đó CHỈ xuất hiện trong "options"/"sub_statements". Giao diện hiển thị content_latex và options/sub_statements RIÊNG BIỆT, nếu lặp cả 2 nơi học sinh sẽ thấy đáp án hiện trùng 2 lần.
+
 Nếu đề bài có bảng số liệu (vd bảng tần số ghép nhóm), trình bày bằng cú pháp Markdown table ngay trong content_latex, ví dụ: "| Nhóm | [0;40) | [40;80) |\n| --- | --- | --- |\n| Tần số | 11 | 10 |". TUYỆT ĐỐI KHÔNG dùng \\begin{tabular}...\\end{tabular} hay bất kỳ cú pháp LaTeX bảng nào khác — hệ thống hiển thị bằng KaTeX, không render được môi trường bảng LaTeX, chỉ render được công thức toán đơn lẻ trong $...$ và bảng Markdown.
 
 Nếu có đáp án/lời giải đi kèm, dùng để điền correct_answer / sub_statements[].answer / short_answer_normalized. Nếu KHÔNG chắc chắn, để null và ghi rõ lý do vào raw_ocr_notes — TUYỆT ĐỐI không bịa đáp án.
@@ -81,12 +83,12 @@ Quy tắc:
 - "multiple_choice": 4 lựa chọn A/B/C/D. max_score 0.25, score_rule "standard".
 - "true_false_group": 4 mệnh đề con a/b/c/d. max_score 1.0, score_rule "thpt2025_truefalse_partial".
 - "short_answer": điền giá trị ngắn. max_score 0.5, score_rule "standard".
-- "figures": liệt kê MỌI hình vẽ/đồ thị/sơ đồ minh họa xuất hiện trên trang (hình học không gian, đồ thị hàm số, sơ đồ, bảng vẽ tay...) — KHÔNG liệt kê icon trang trí hay logo. "bbox_1000" là toạ độ khung hình đó [x0,y0,x1,y1], chuẩn hoá theo thang 0-1000 trên cả 2 trục, (0,0) là góc trên-trái trang, (1000,1000) là góc dưới-phải trang.
-  QUAN TRỌNG về độ chính xác khung cắt (đã quan sát thực tế lỗi khung sai gây ra 2 kiểu lỗi — khung quá LỚN chụp dính cả chữ của câu khác bên dưới/bên cạnh, hoặc khung quá NHỎ cắt mất 1 phần hình như nhãn đỉnh/điểm):
-  1. Xác định ranh giới hình vẽ bằng mắt: cạnh trên/dưới/trái/phải của khung PHẢI trùng với nét vẽ/nhãn chữ cái NGOÀI CÙNG của chính hình đó (vd nếu hình có đỉnh A ở trên cùng, khung phải đủ cao để trọn chữ "A", không cắt cụt).
-  2. Khung TUYỆT ĐỐI không được chứa bất kỳ dòng chữ nào thuộc nội dung câu hỏi (đề bài, đáp án A/B/C/D, câu hỏi khác) — nếu hình và chữ nằm sát nhau, dừng khung NGAY SÁT mép ngoài nét vẽ cuối cùng, chừa khoảng trắng chứ không lấn vào vùng chữ.
+- "content_latex" CHỈ chứa phần dẫn đề dùng chung, TUYỆT ĐỐI KHÔNG chép lại các lựa chọn A/B/C/D hay mệnh đề a)/b)/c)/d) vào đó — những thứ đó CHỈ nằm trong "options"/"sub_statements", lặp cả 2 nơi sẽ hiện trùng lặp cho học sinh.
+- "figures": BẮT BUỘC liệt kê MỌI hình vẽ/đồ thị/sơ đồ minh họa xuất hiện trên trang (hình học không gian, đồ thị hàm số, sơ đồ, bảng vẽ tay...) — KHÔNG liệt kê icon trang trí hay logo. Nếu câu hỏi nhắc "xem hình dưới/hình bên" thì trang CHẮC CHẮN có hình, TUYỆT ĐỐI không được bỏ sót hình đó chỉ vì không chắc chắn ranh giới chính xác — thà vẽ khung chưa hoàn hảo còn hơn không liệt kê gì cả. "bbox_1000" là toạ độ khung hình đó [x0,y0,x1,y1], chuẩn hoá theo thang 0-1000 trên cả 2 trục, (0,0) là góc trên-trái trang, (1000,1000) là góc dưới-phải trang.
+  QUAN TRỌNG về độ chính xác khung cắt — ưu tiên KHÔNG BAO GIỜ cắt thiếu hình hơn là cắt đẹp:
+  1. Xác định ranh giới hình vẽ bằng mắt, rồi NỚI RỘNG khung thêm một chút ra mọi phía (an toàn hơn là vừa khít) để chắc chắn không cắt mất nét vẽ, đường kẻ, hay nhãn đỉnh/điểm nằm sát rìa — thừa một chút nền trắng xung quanh hình là HOÀN TOÀN CHẤP NHẬN ĐƯỢC.
+  2. Chỉ tránh để khung lấn vào DÒNG CHỮ của câu hỏi khác ở xa hình (đề bài, đáp án A/B/C/D) — nếu hình và chữ nằm sát nhau trong cùng 1 câu, ưu tiên lấy đủ hình hơn là cắt gọn, vì thiếu hình nghiêm trọng hơn nhiều so với dư vài chữ ở mép.
   3. Nếu 1 trang có nhiều hình riêng biệt (vd nhiều câu hỏi mỗi câu 1 hình), mỗi hình phải có khung RIÊNG, không gộp 2 hình liền kề vào 1 bbox.
-  4. Trước khi trả kết quả, tự kiểm tra lại từng bbox: hình dạng cắt ra có đúng là 1 hình vẽ hoàn chỉnh, không thiếu nhãn, không dính chữ ngoài hình hay không.
 - "figure_refs": mảng id các hình (từ "figures") thuộc về câu hỏi này, theo đúng thứ tự xuất hiện. Một câu có thể có 0, 1 hoặc nhiều hình. Để mảng rỗng [] nếu câu không có hình.
 - Nếu có đáp án/lời giải trên trang này, dùng để điền đáp án đúng. Nếu không, để null, TUYỆT ĐỐI không bịa.
 - Nếu trang có bảng số liệu, trình bày bằng cú pháp Markdown table trong content_latex (vd: "| Nhóm | [0;40) |\n| --- | --- |\n| Tần số | 11 |"). TUYỆT ĐỐI KHÔNG dùng \\begin{tabular}...\\end{tabular} — hệ thống không render được bảng LaTeX.
@@ -392,7 +394,16 @@ export async function extractPdfPages(
       if (!Array.isArray(bbox) || bbox.length !== 4 || bbox.some((n) => typeof n !== "number" || !Number.isFinite(n))) {
         continue;
       }
-      const [x0, y0, x1, y1] = bbox;
+      // Nới khung thêm 3% bề rộng/cao mỗi cạnh làm lưới an toàn — không phụ thuộc hoàn
+      // toàn vào việc Gemini vẽ khung chính xác tuyệt đối. Quan sát thực tế: khung sát y
+      // nguyên theo LLM trả về đôi khi cắt mất nhãn đỉnh/điểm ở rìa hình; dư thêm vài %
+      // nền trắng xung quanh ít gây hại hơn nhiều so với cắt thiếu.
+      const MARGIN = 0.03;
+      const [rawX0, rawY0, rawX1, rawY1] = bbox;
+      const x0 = Math.max(0, rawX0 - (rawX1 - rawX0) * MARGIN);
+      const y0 = Math.max(0, rawY0 - (rawY1 - rawY0) * MARGIN);
+      const x1 = Math.min(1000, rawX1 + (rawX1 - rawX0) * MARGIN);
+      const y1 = Math.min(1000, rawY1 + (rawY1 - rawY0) * MARGIN);
       const left = Math.max(0, Math.round((x0 / 1000) * width));
       const top = Math.max(0, Math.round((y0 / 1000) * height));
       const cropWidth = Math.min(width - left, Math.round(((x1 - x0) / 1000) * width));

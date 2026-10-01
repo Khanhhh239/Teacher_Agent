@@ -80,25 +80,57 @@ function normalizeImageUrls(question: Record<string, unknown>): string[] {
   return [];
 }
 
+/**
+ * LLM đôi khi vẫn chép nguyên văn các mệnh đề a)/b)/c)/d) (hoặc lựa chọn A/B/C/D) vào CUỐI
+ * content_latex dù đã dặn không làm vậy trong prompt — kết quả là học sinh thấy đáp án
+ * hiện trùng 2 lần (1 lần trong đoạn dẫn đề, 1 lần trong vùng chọn đáp án). Không nên dựa
+ * hoàn toàn vào việc LLM nghe lời prompt — tự phát hiện: nếu nội dung TỪNG mệnh đề/lựa
+ * chọn đã có xuất hiện làm substring trong content_latex (đúng thứ tự), cắt content_latex
+ * tại vị trí xuất hiện ĐẦU TIÊN để chỉ giữ lại phần dẫn đề dùng chung.
+ */
+function stripDuplicatedChoices(content: string, items: { text_latex: string }[]): string {
+  if (items.length < 2) return content;
+  let searchFrom = 0;
+  let firstMatchIndex = -1;
+  for (const item of items) {
+    const needle = item.text_latex.trim();
+    if (!needle) return content;
+    const idx = content.indexOf(needle, searchFrom);
+    if (idx === -1) return content; // không tìm thấy hết -> không phải trường hợp lặp, giữ nguyên
+    if (firstMatchIndex === -1) firstMatchIndex = idx;
+    searchFrom = idx + needle.length;
+  }
+  // Cắt xong vẫn còn sót lại nhãn chữ cái đứng trước (vd "... a)" hoặc "... A.") — dọn nốt.
+  return content
+    .slice(0, firstMatchIndex)
+    .replace(/[a-dA-D][.)]\s*$/, "")
+    .trim();
+}
+
 export function normalizeExtractedExam(raw: unknown): ExtractedExam {
   const data = raw as Partial<ExtractedExam> & { questions?: unknown[] };
   const questions = (data.questions ?? []).map((q) => {
     const question = q as Record<string, unknown>;
     const { partLabel, rest } = extractPartLabel(String(question.content_latex ?? ""));
+    const options = ((question.options as Array<Record<string, unknown>>) ?? []).map((o) => ({
+      key: o.key ?? "",
+      text_latex: stripImageMarkers(String(o.text_latex ?? "")),
+    }));
+    const sub_statements = ((question.sub_statements as Array<Record<string, unknown>>) ?? []).map((s) => ({
+      key: s.key ?? "",
+      text_latex: stripImageMarkers(String(s.text_latex ?? "")),
+      answer: s.answer ?? false,
+    }));
+    let content_latex = stripImageMarkers(rest);
+    content_latex = stripDuplicatedChoices(content_latex, options);
+    content_latex = stripDuplicatedChoices(content_latex, sub_statements);
     return {
       type: question.type ?? "short_answer",
-      content_latex: stripImageMarkers(rest),
+      content_latex,
       part_label: partLabel,
       image_urls: normalizeImageUrls(question),
-      options: ((question.options as Array<Record<string, unknown>>) ?? []).map((o) => ({
-        key: o.key ?? "",
-        text_latex: stripImageMarkers(String(o.text_latex ?? "")),
-      })),
-      sub_statements: ((question.sub_statements as Array<Record<string, unknown>>) ?? []).map((s) => ({
-        key: s.key ?? "",
-        text_latex: stripImageMarkers(String(s.text_latex ?? "")),
-        answer: s.answer ?? false,
-      })),
+      options,
+      sub_statements,
       correct_answer: question.correct_answer ?? null,
       short_answer_normalized: question.short_answer_normalized ?? null,
       score_rule: question.score_rule ?? "standard",
