@@ -1,6 +1,21 @@
 import type { ExtractedExam } from "@/types/exam";
 
 /**
+ * LLM được dặn xóa marker [IMAGE:...] khỏi content_latex sau khi gán vào image_urls,
+ * nhưng không phải lúc nào cũng tuân thủ 100% — đặc biệt khi 1 câu có nhiều marker liên
+ * tiếp (đã quan sát thực tế: ảnh được gán đúng vào image_urls nhưng marker vẫn còn sót
+ * trong text). Không nên phụ thuộc hoàn toàn vào việc LLM làm đúng 1 việc code có thể tự
+ * đảm bảo chắc chắn — dọn sạch mọi marker còn sót lại ở đây bất kể LLM có xóa hay chưa.
+ */
+function stripImageMarkers(text: string): string {
+  return text
+    .replace(/\[IMAGE:[^\]]*\]/g, "")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\s+([.,;:])/g, "$1")
+    .trim();
+}
+
+/**
  * LLM đôi khi trả JSON null tường minh (không chỉ thiếu key) cho các trường không áp
  * dụng — DB không cho NULL ở cột options/sub_statements nên phải ép giá trị ở đây.
  * Port từ pipeline/extract.py's _set_default().
@@ -21,12 +36,15 @@ export function normalizeExtractedExam(raw: unknown): ExtractedExam {
     const question = q as Record<string, unknown>;
     return {
       type: question.type ?? "short_answer",
-      content_latex: question.content_latex ?? "",
+      content_latex: stripImageMarkers(String(question.content_latex ?? "")),
       image_urls: normalizeImageUrls(question),
-      options: question.options ?? [],
+      options: ((question.options as Array<Record<string, unknown>>) ?? []).map((o) => ({
+        key: o.key ?? "",
+        text_latex: stripImageMarkers(String(o.text_latex ?? "")),
+      })),
       sub_statements: ((question.sub_statements as Array<Record<string, unknown>>) ?? []).map((s) => ({
         key: s.key ?? "",
-        text_latex: s.text_latex ?? "",
+        text_latex: stripImageMarkers(String(s.text_latex ?? "")),
         answer: s.answer ?? false,
       })),
       correct_answer: question.correct_answer ?? null,
