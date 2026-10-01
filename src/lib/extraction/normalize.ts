@@ -7,8 +7,26 @@ import type { ExtractedExam } from "@/types/exam";
  * trong text). Không nên phụ thuộc hoàn toàn vào việc LLM làm đúng 1 việc code có thể tự
  * đảm bảo chắc chắn — dọn sạch mọi marker còn sót lại ở đây bất kể LLM có xóa hay chưa.
  */
+/**
+ * LLM hay viết $\vec{v_3}$ (dấu accent bọc luôn cả chỉ số dưới thành 1 khối) thay vì
+ * $\vec{v}_3$ (chỉ số đặt NGOÀI accent) — về mặt LaTeX cả 2 cách viết đều "hợp lệ cú
+ * pháp", nhưng KaTeX đặt mũi tên/mũ dựa trên bề rộng toàn bộ base+subscript khi chúng bị
+ * gộp chung trong 1 accent, khiến mũi tên lệch vị trí và nhìn như ký tự khác (quan sát
+ * thực tế: "v_3" với \vec bọc ngoài hiển thị trông giống chữ "y3"). Tách chỉ số ra ngoài
+ * accent để KaTeX đặt đúng vị trí, không đổi ý nghĩa toán học.
+ */
+function fixAccentOverScript(text: string): string {
+  return text.replace(
+    /\\(vec|hat|widehat|overline|bar|tilde)\{([A-Za-z]+)([_^])(\{[^{}]*\}|[A-Za-z0-9])\}/g,
+    (_m, cmd: string, base: string, scriptType: string, script: string) => {
+      const scriptContent = script.startsWith("{") ? script : `{${script}}`;
+      return `\\${cmd}{${base}}${scriptType}${scriptContent}`;
+    }
+  );
+}
+
 function stripImageMarkers(text: string): string {
-  return text
+  return fixAccentOverScript(text)
     .replace(/\[IMAGE:[^\]]*\]/g, "")
     // LLM đôi khi double-escape "\n" thành literal 2 ký tự backslash+n thay vì JSON tự
     // decode thành 1 ký tự xuống dòng thật — còn sót lại dạng text thô "\n" hiển thị cho
