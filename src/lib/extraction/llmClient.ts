@@ -895,11 +895,16 @@ async function extractImagePages(
         // thông tin (vd đoán multiple_choice vì chưa thấy mệnh đề a/b/c/d).
         const prev = allQuestions[allQuestions.length - 1] as unknown as Record<string, unknown>;
         const mergedContent = `${String(prev.content_latex ?? "")} ${contentStr.slice(CONTINUATION_MARKER.length).trim()}`.trim();
+        // Hợp nhất options/sub_statements theo key (nửa sau thắng nếu trùng key) thay vì ghi
+        // đè nguyên mảng — kiểm chứng thực tế: câu Đúng/Sai bị cắt ngang trang chỉ còn 3/4
+        // mệnh đề vì mệnh đề a) ở nửa trước bị mảng của nửa sau đè mất.
         allQuestions[allQuestions.length - 1] = {
           ...prev,
           ...q,
           content_latex: mergedContent,
           image_urls: [...((prev.image_urls as string[]) ?? []), ...imageUrls],
+          options: unionByKey(prev.options, (q as Record<string, unknown>).options),
+          sub_statements: unionByKey(prev.sub_statements, (q as Record<string, unknown>).sub_statements),
         } as ExtractedExam["questions"][number];
       } else {
         allQuestions.push({ ...q, image_urls: imageUrls } as ExtractedExam["questions"][number]);
@@ -922,7 +927,45 @@ async function extractImagePages(
   }
 
   return {
-    extracted: { title: title ?? "", subject: subject ?? "", source_branch: "PDF_IMAGE_ONLY", questions: allQuestions },
+    extracted: {
+      title: title ?? "",
+      subject: subject ?? "",
+      source_branch: "PDF_IMAGE_ONLY",
+      questions: allQuestions.map(fixQuestionTypeFromShape),
+    },
     images,
   };
+}
+
+/** Gộp 2 mảng {key,...} theo key, phần tử sau thắng nếu trùng key, giữ thứ tự xuất hiện. */
+function unionByKey(a: unknown, b: unknown): Array<{ key: string }> {
+  const out = new Map<string, { key: string }>();
+  for (const item of [...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])]) {
+    if (item && typeof (item as { key?: unknown }).key === "string") {
+      out.set((item as { key: string }).key, item as { key: string });
+    }
+  }
+  return [...out.values()];
+}
+
+/**
+ * Sửa kiểu câu hỏi theo "hình dạng" dữ liệu thực tế khi model gán sai (quan sát thực tế khi
+ * đọc ở chế độ chống trùng khớp/tách đôi trang: câu điền đáp án ngắn bị gán multiple_choice
+ * với 0 lựa chọn → học sinh không có ô nhập, đáp án từ file đáp án cũng không ghép được):
+ * - multiple_choice nhưng không có lựa chọn nào: có mệnh đề → true_false_group, không → short_answer
+ * - true_false_group nhưng không có mệnh đề mà có lựa chọn → multiple_choice
+ */
+function fixQuestionTypeFromShape(q: ExtractedExam["questions"][number]): ExtractedExam["questions"][number] {
+  const optionCount = Array.isArray(q.options) ? q.options.length : 0;
+  const subCount = Array.isArray(q.sub_statements) ? q.sub_statements.length : 0;
+  if (q.type === "multiple_choice" && optionCount === 0) {
+    if (subCount > 0) {
+      return { ...q, type: "true_false_group", score_rule: "thpt2025_truefalse_partial", max_score: 1.0 };
+    }
+    return { ...q, type: "short_answer", score_rule: "standard", max_score: 0.5 };
+  }
+  if (q.type === "true_false_group" && subCount === 0 && optionCount > 0) {
+    return { ...q, type: "multiple_choice", score_rule: "standard", max_score: 0.25 };
+  }
+  return q;
 }
