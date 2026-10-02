@@ -37,11 +37,14 @@ export function QuestionEditor({ question }: { question: Question }) {
         score_rule: q.score_rule,
         max_score: q.max_score,
         needs_review: false,
+        // Chỉ ghi extraction_meta khi câu đã có (cột tồn tại): sửa tay = giáo viên đã xử lý câu
+        // "chưa đọc được", gỡ cờ chặn nhưng giữ lại danh sách cờ để còn biết lịch sử.
+        ...(q.extraction_meta ? { extraction_meta: { ...q.extraction_meta, blocking: false } } : {}),
       })
       .eq("id", q.id);
     setSaving(false);
     setEditing(false);
-    setQ({ ...q, needs_review: false });
+    setQ({ ...q, needs_review: false, extraction_meta: q.extraction_meta ? { ...q.extraction_meta, blocking: false } : q.extraction_meta });
     // Đồng bộ lại số "câu chưa duyệt" tính ở Server Component cha (ExamStatusControls)
     router.refresh();
   }
@@ -93,6 +96,47 @@ export function QuestionEditor({ question }: { question: Question }) {
           </span>
         )}
       </div>
+
+      {/* Cờ cảnh báo cụ thể của bước số hóa (hai lần đọc khác nhau, công thức lỗi, thiếu đáp án...) */}
+      {q.extraction_meta && q.extraction_meta.flags.length > 0 && (
+        <div
+          className={`mb-3 rounded-md border p-2 text-xs ${
+            q.extraction_meta.blocking ? "border-red-300 bg-red-50 text-red-800" : "border-amber-300 bg-amber-50 text-amber-900"
+          }`}
+        >
+          <p className="mb-1 font-semibold">
+            {q.extraction_meta.blocking ? "⛔ Cần xử lý trước khi xác nhận đề:" : "⚠ Cần soát kỹ câu này:"}
+          </p>
+          <ul className="ml-4 list-disc space-y-0.5">
+            {q.extraction_meta.flags.map((f, i) => (
+              <li key={i}>{f}</li>
+            ))}
+          </ul>
+          {q.extraction_meta.alt && (
+            <details className="mt-1">
+              <summary className="cursor-pointer font-medium">Xem bản đọc thứ hai (không được chọn)</summary>
+              <p className="mt-1 whitespace-pre-wrap rounded bg-white/70 p-1 font-mono text-[11px]">
+                {q.extraction_meta.alt.content_latex}
+                {q.extraction_meta.alt.options.map((o) => `
+${o.key}. ${o.text_latex}`).join("")}
+                {q.extraction_meta.alt.sub_statements.map((o) => `
+${o.key}) ${o.text_latex}`).join("")}
+              </p>
+            </details>
+          )}
+        </div>
+      )}
+
+      {/* Ảnh cắt gốc của riêng câu này từ đề — đối chiếu bản số hóa với đề thật. */}
+      {q.source_crop_url && (
+        <details open className="mb-3 rounded-md border border-slate-200 bg-slate-50 p-2">
+          <summary className="cursor-pointer text-xs font-medium text-slate-600">Ảnh gốc của câu này (đối chiếu)</summary>
+          <a href={q.source_crop_url} target="_blank" rel="noreferrer">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={q.source_crop_url} alt="Ảnh gốc của câu" className="mt-2 max-h-80 rounded border bg-white" />
+          </a>
+        </details>
+      )}
 
       {/* Ảnh minh họa luôn hiển thị (cả khi đang sửa) — giáo viên cần đối chiếu nội dung với ảnh gốc.
           Ảnh AI tự cắt đôi khi thừa/thiếu nội dung — cho phép giáo viên tự chụp & thay thế. */}

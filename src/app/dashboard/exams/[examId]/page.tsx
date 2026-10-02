@@ -24,6 +24,7 @@ export default async function ExamReviewPage({
     .order("order_index");
 
   const pendingReview = (questions as Question[] | null)?.filter((q) => q.needs_review).length ?? 0;
+  const flaggedCount = (questions as Question[] | null)?.filter((q) => (q.extraction_meta?.flags.length ?? 0) > 0).length ?? 0;
 
   return (
     <div>
@@ -33,6 +34,7 @@ export default async function ExamReviewPage({
           <p className="text-sm text-slate-500">
             {(exam as Exam).subject} · {(exam as Exam).duration_minutes} phút ·{" "}
             {(questions as Question[] | null)?.length ?? 0} câu
+            {flaggedCount > 0 && <span className="font-medium text-amber-700"> · {flaggedCount} câu có cờ cảnh báo, soát kỹ các câu này</span>}
           </p>
         </div>
         <ExamStatusControls

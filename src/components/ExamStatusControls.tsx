@@ -19,6 +19,8 @@ export function ExamStatusControls({
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  // Câu chưa đọc được tự động (extraction_meta.blocking) phải được giáo viên sửa/lưu trước.
+  const blockingCount = questions.filter((q) => q.extraction_meta?.blocking).length;
 
   async function markReady() {
     setBusy(true);
@@ -40,9 +42,16 @@ export function ExamStatusControls({
           {pendingReview > 0 && (
             <span className="text-sm text-slate-500">{pendingReview} câu có thể cần xem lại kỹ hơn.</span>
           )}
+          {blockingCount > 0 && (
+            <span className="text-sm font-medium text-red-600">
+              ⛔ Còn {blockingCount} câu chưa đọc được tự động — sửa và bấm Xác nhận từng câu đó trước.
+            </span>
+          )}
           <button
             onClick={() => setShowPreview(true)}
-            className="rounded-md bg-green-600 px-3 py-1.5 text-sm font-medium text-white"
+            disabled={blockingCount > 0}
+            title={blockingCount > 0 ? "Còn câu chưa đọc được, cần xử lý trước" : undefined}
+            className="rounded-md bg-green-600 px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
           >
             Xem trước & Đánh dấu sẵn sàng
           </button>

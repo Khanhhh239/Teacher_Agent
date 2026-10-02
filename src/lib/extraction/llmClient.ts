@@ -1,6 +1,7 @@
 import { Agent, fetch as undiciFetch } from "undici";
 import type { ExtractedExam } from "@/types/exam";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { waitForSlot } from "./rateLimiter";
 
 /**
  * Gọi LLM (Gemini free tier ưu tiên, tự fallback DeepSeek nếu hết quota/lỗi) để cấu trúc
@@ -170,7 +171,7 @@ export function fixLatexBackslashes(text: string): string {
   return out;
 }
 
-function extractJson(text: string): unknown {
+export function extractJson(text: string): unknown {
   let t = text.trim();
   if (t.startsWith("```")) {
     t = t.split("```")[1] ?? t;
@@ -358,15 +359,16 @@ async function callGeminiText(prompt: string, warnings?: string[]): Promise<stri
   return callGeminiRaw(GEMINI_MODEL_TEXT, [{ text: prompt }], warnings);
 }
 
-async function callGeminiWithImage(
+export async function callGeminiWithImage(
   imageBase64: string,
   prompt: string,
   mimeType = "image/png",
   warnings?: string[],
-  temperature = 0
+  temperature = 0,
+  model: string = GEMINI_MODEL_VISION
 ): Promise<string> {
   return callGeminiRaw(
-    GEMINI_MODEL_VISION,
+    model,
     [
       { inline_data: { mime_type: mimeType, data: imageBase64 } },
       { text: prompt },
@@ -544,8 +546,15 @@ export async function extractAnswerKeyFromText(rawText: string, warnings?: strin
  * thực tế là vô ích (xem ghi chú tại ocrPdfPageWithRecitationRetry), chỉ tốn lệnh gọi và dễ
  * vượt rate limit. Việc tách đôi trang khi gặp RECITATION do extractAnswerKeyFromPageWithSplit
  * đảm nhiệm ở lớp gọi. */
-export async function extractAnswerKeyFromImage(imageBase64: string, mimeType = "image/png", warnings?: string[]): Promise<AnswerKeyEntry[]> {
-  return parseAnswerKeyResponse(await callGeminiWithImage(imageBase64, ANSWER_KEY_PROMPT, mimeType, warnings, 0));
+export async function extractAnswerKeyFromImage(
+  imageBase64: string,
+  mimeType = "image/png",
+  warnings?: string[],
+  model: string = GEMINI_MODEL_VISION
+): Promise<AnswerKeyEntry[]> {
+  // Giãn nhịp theo hạn mức free từng model để không dồn dập vào cùng lúc với phần đọc đề.
+  await waitForSlot(model);
+  return parseAnswerKeyResponse(await callGeminiWithImage(imageBase64, ANSWER_KEY_PROMPT, mimeType, warnings, 0, model));
 }
 
 /** File đáp án dạng PDF nhiều trang — render từng trang rồi gọi Gemini vision riêng cho mỗi
@@ -557,10 +566,11 @@ async function extractAnswerKeyFromPageWithSplit(
   pageBuffer: Buffer,
   pageLabel: string,
   warnings: string[] | undefined,
-  depth: number
+  depth: number,
+  model: string = GEMINI_MODEL_VISION
 ): Promise<AnswerKeyEntry[]> {
   try {
-    return await extractAnswerKeyFromImage(pageBuffer.toString("base64"), "image/png", warnings);
+    return await extractAnswerKeyFromImage(pageBuffer.toString("base64"), "image/png", warnings, model);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     if (!message.includes("RECITATION")) throw e;
@@ -588,19 +598,28 @@ async function extractAnswerKeyFromPageWithSplit(
     const topHalf = await sharp(pageBuffer).extract({ left: 0, top: 0, width, height: topHeight }).png().toBuffer();
     const bottomHalf = await sharp(pageBuffer).extract({ left: 0, top: bottomTop, width, height: height - bottomTop }).png().toBuffer();
     const [topEntries, bottomEntries] = await Promise.all([
-      extractAnswerKeyFromPageWithSplit(topHalf, `${pageLabel} (nửa trên)`, warnings, depth + 1),
-      extractAnswerKeyFromPageWithSplit(bottomHalf, `${pageLabel} (nửa dưới)`, warnings, depth + 1),
+      extractAnswerKeyFromPageWithSplit(topHalf, `${pageLabel} (nửa trên)`, warnings, depth + 1, model),
+      extractAnswerKeyFromPageWithSplit(bottomHalf, `${pageLabel} (nửa dưới)`, warnings, depth + 1, model),
     ]);
     return [...topEntries, ...bottomEntries];
   }
 }
 
-export async function extractAnswerKeyFromPdf(buffer: Buffer, warnings?: string[]): Promise<AnswerKeyEntry[]> {
+export async function extractAnswerKeyFromPdf(
+  buffer: Buffer,
+  warnings?: string[],
+  opts: { model?: string; deadline?: number } = {}
+): Promise<AnswerKeyEntry[]> {
   const { renderPdfPages } = await import("./pdfRender");
   const pages = renderPdfPages(buffer);
   const all: AnswerKeyEntry[] = [];
   for (let i = 0; i < pages.length; i++) {
-    const entries = await extractAnswerKeyFromPageWithSplit(pages[i], `Trang ${i + 1} (đáp án)`, warnings, 0);
+    // Quá hạn thời gian của request: dừng đọc tiếp, báo rõ phần còn thiếu thay vì để Vercel cắt request.
+    if (opts.deadline !== undefined && Date.now() > opts.deadline) {
+      warnings?.push(`Hết thời gian xử lý nên chưa đọc đáp án từ trang ${i + 1} trở đi của file đáp án — giáo viên tự điền các đáp án còn thiếu (gợi ý: upload ảnh bảng đáp án thay vì file lời giải dài).`);
+      break;
+    }
+    const entries = await extractAnswerKeyFromPageWithSplit(pages[i], `Trang ${i + 1} (đáp án)`, warnings, 0, opts.model);
     all.push(...entries);
   }
   return all;
@@ -649,6 +668,14 @@ function reconcileTypeWithKey(
   return { q: { ...q, type: kind, ...TYPE_DEFAULTS[kind] }, ok: true };
 }
 
+type QuestionItem = ExtractedExam["questions"][number];
+
+/** Gắn thêm 1 cờ cảnh báo riêng cho câu (lưu trong extraction_meta). */
+function withFlag(q: QuestionItem, flag: string): QuestionItem {
+  const meta = q.extraction_meta ?? { flags: [] };
+  return { ...q, extraction_meta: { ...meta, flags: [...meta.flags, flag] } };
+}
+
 export function mergeAnswerKeyIntoQuestions(
   questions: ExtractedExam["questions"],
   answerKey: AnswerKeyEntry[],
@@ -666,32 +693,37 @@ export function mergeAnswerKeyIntoQuestions(
     const kind = entry ? keyKind(entry) : null;
     if (!entry || !kind) {
       missing.push(n);
-      return q0;
+      return withFlag(q0, "Chưa có đáp án từ file đáp án — giáo viên tự chọn đáp án đúng");
     }
     const { q, ok } = reconcileTypeWithKey(q0, kind);
     if (!ok) {
       mismatched.push(n);
-      return q0;
+      return withFlag(q0, "Loại câu không khớp loại đáp án trong file đáp án — CHƯA ghép đáp án, kiểm tra tay");
     }
-    if (q !== q0) typeFixed.push(n);
+    let out: QuestionItem = q;
+    if (q !== q0) {
+      typeFixed.push(n);
+      out = withFlag(out, `Đã tự sửa loại câu theo file đáp án (từ ${q0.type} thành ${kind})`);
+    }
 
     if (kind === "multiple_choice") {
-      return { ...q, correct_answer: String(entry.correct_answer).trim().toUpperCase() };
+      return { ...out, correct_answer: String(entry.correct_answer).trim().toUpperCase() };
     }
     if (kind === "true_false_group") {
       const answerByKey = new Map((entry.sub_statements ?? []).map((s) => [s.key, s.answer]));
-      if (answerByKey.size > q.sub_statements.length) {
-        partialStatements.push(`${n} (đọc được ${q.sub_statements.length}/${answerByKey.size} mệnh đề)`);
+      if (answerByKey.size > out.sub_statements.length) {
+        partialStatements.push(`${n} (đọc được ${out.sub_statements.length}/${answerByKey.size} mệnh đề)`);
+        out = withFlag(out, `Đề chỉ đọc được ${out.sub_statements.length}/${answerByKey.size} ý so với file đáp án`);
       }
       return {
-        ...q,
-        sub_statements: q.sub_statements.map((s) => ({
+        ...out,
+        sub_statements: out.sub_statements.map((s) => ({
           ...s,
           answer: answerByKey.has(s.key) ? answerByKey.get(s.key)! : s.answer,
         })),
       };
     }
-    return { ...q, short_answer_normalized: String(entry.value).trim() };
+    return { ...out, short_answer_normalized: String(entry.value).trim() };
   });
 
   if (warnings) {
@@ -734,11 +766,11 @@ interface PdfPageResult {
  * vẫn y nguyên bản gốc. Chỉ dùng khi lần đọc thường đã bị RECITATION (không dùng mặc định vì
  * làm output dài hơn và có rủi ro nhỏ model chèn sai chỗ).
  */
-const MARKER_CHAR = "¦";
+export const MARKER_CHAR = "¦";
 const MARKER_RULE = `
 QUY TẮC BẮT BUỘC về định dạng văn bản: trong MỌI trường chữ (content_latex, text_latex), cứ sau mỗi khoảng 3 từ liên tiếp phải chèn thêm đúng 1 ký hiệu " ${MARKER_CHAR} " (dấu gạch đứt U+00A6, có khoảng trắng 2 bên) tại chỗ ĐÃ có khoảng trắng — cả trong câu dẫn lẫn trong phần lựa chọn/mệnh đề. KHÔNG chèn vào giữa 1 lệnh LaTeX, giữa các chữ số của 1 số, hay bên trong cặp ngoặc {}. Hệ thống sẽ tự xóa ký hiệu này sau nên bắt buộc làm đúng, không bỏ sót. Phần còn lại của schema JSON (type, key, figure_refs, figures...) giữ NGUYÊN như yêu cầu ở trên, vẫn trả về 1 object có khóa "questions" và "figures".`;
 
-function stripMarkers<T>(value: T): T {
+export function stripMarkers<T>(value: T): T {
   if (typeof value === "string") {
     return value.replace(new RegExp(`[ \\t]*${MARKER_CHAR}[ \\t]*`, "g"), " ") as unknown as T;
   }

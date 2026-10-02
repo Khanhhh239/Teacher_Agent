@@ -13,6 +13,8 @@ import {
 } from "@/lib/extraction/llmClient";
 import { normalizeExtractedExam } from "@/lib/extraction/normalize";
 import { convertToPdf } from "@/lib/conversion/cloudconvert";
+import { runQuestionPipeline, MODEL_B } from "@/lib/extraction/questionPipeline";
+import type { ExtractionMeta } from "@/types/exam";
 
 export const runtime = "nodejs";
 // Gemini đôi khi mất 30-90s để sinh JSON dài (đề 20+ câu), cộng thêm tối đa 3 lần retry
@@ -28,6 +30,11 @@ function extOf(filename: string): string {
 }
 
 export async function POST(request: Request) {
+  const startedAt = Date.now();
+  // Trần thời gian xử lý bằng AI: sau mốc này không bắt đầu lệnh gọi mới (câu chưa đọc được sẽ
+  // thành câu chờ xử lý có cờ chặn) — đảm bảo không bao giờ vượt maxDuration=280s của Vercel.
+  const READ_DEADLINE = startedAt + 215_000;
+  const ANSWER_DEADLINE = startedAt + 235_000;
   const supabase = await createClient();
   const {
     data: { user },
@@ -139,10 +146,14 @@ export async function POST(request: Request) {
     extracted: ReturnType<typeof normalizeExtractedExam>;
     localImages: Map<string, Buffer> | null;
     previewPdfBuffer: Buffer | null;
+    crops: Map<number, Buffer> | null;
+    metas: ExtractionMeta[] | null;
   }> {
     let extracted: ReturnType<typeof normalizeExtractedExam>;
     let localImages: Map<string, Buffer> | null = null;
     let previewPdfBuffer: Buffer | null = null;
+    let crops: Map<number, Buffer> | null = null;
+    let metas: ExtractionMeta[] | null = null;
 
     try {
       if (ext === "docx") {
@@ -161,9 +172,19 @@ export async function POST(request: Request) {
           // không có bản xem trước PDF — OriginalFileViewer sẽ chỉ hiện link tải file .docx
         }
       } else if (ext === "pdf") {
-        const { extracted: pdfExtracted, images } = await extractPdfPages(buffer, warnings);
-        localImages = images;
-        extracted = normalizeExtractedExam({ ...pdfExtracted, source_branch: "PDF_IMAGE_ONLY" });
+        // PDF có lớp chữ (xuất từ Word...): đọc TỪNG CÂU, 2 lần độc lập, có kiểm chứng + cờ.
+        // Không phân đoạn được (bản quét, nhãn câu không liên tục...) thì dùng cách đọc cả trang cũ.
+        const v2 = await runQuestionPipeline(buffer, warnings, { deadline: READ_DEADLINE });
+        if (v2) {
+          localImages = v2.images;
+          crops = v2.crops;
+          metas = v2.metas;
+          extracted = normalizeExtractedExam({ ...v2.extracted, source_branch: "PDF_TEXT_LAYER" });
+        } else {
+          const { extracted: pdfExtracted, images } = await extractPdfPages(buffer, warnings);
+          localImages = images;
+          extracted = normalizeExtractedExam({ ...pdfExtracted, source_branch: "PDF_IMAGE_ONLY" });
+        }
       } else {
         const { extracted: imgExtracted, images } = await extractExamFromImage(buffer, warnings);
         localImages = images;
@@ -174,7 +195,7 @@ export async function POST(request: Request) {
       throw new Error(`Lỗi xử lý file đề thi: ${message}`);
     }
 
-    return { extracted, localImages, previewPdfBuffer };
+    return { extracted, localImages, previewPdfBuffer, crops, metas };
   }
 
   async function processAnswerKeyFile() {
@@ -186,9 +207,16 @@ export async function POST(request: Request) {
         const result = await extractDocx(answerBuffer);
         answerKey = await extractAnswerKeyFromText(result.text, warnings);
       } else if (answerExt === "pdf") {
-        answerKey = await extractAnswerKeyFromPdf(answerBuffer, warnings);
+        // Đọc đáp án bằng model B (hạn mức free tính riêng từng model) để không tranh hạn mức với
+        // phần đọc đề (model A).
+        answerKey = await extractAnswerKeyFromPdf(answerBuffer, warnings, { model: MODEL_B, deadline: ANSWER_DEADLINE });
       } else {
-        answerKey = await extractAnswerKeyFromImage(answerBuffer.toString("base64"), `image/${answerExt === "jpg" ? "jpeg" : answerExt}`, warnings);
+        answerKey = await extractAnswerKeyFromImage(
+          answerBuffer.toString("base64"),
+          `image/${answerExt === "jpg" ? "jpeg" : answerExt}`,
+          warnings,
+          MODEL_B
+        );
       }
       if (answerKey.length === 0) {
         warnings.push("Không đọc được đáp án nào từ file đáp án — giáo viên cần tự điền đáp án ở bước duyệt.");
@@ -210,8 +238,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: message }, { status: 500 });
   }
 
-  const { localImages, previewPdfBuffer } = examResult;
-  const extracted = { ...examResult.extracted, questions: mergeAnswerKeyIntoQuestions(examResult.extracted.questions, answerKey, warnings) };
+  const { localImages, previewPdfBuffer, crops } = examResult;
+  const withMeta = examResult.extracted.questions.map((q, i) => ({ ...q, extraction_meta: examResult.metas?.[i] ?? null }));
+  const extracted = { ...examResult.extracted, questions: mergeAnswerKeyIntoQuestions(withMeta, answerKey, warnings) };
 
   const { data: exam, error: examError } = await supabase
     .from("exams")
@@ -267,6 +296,7 @@ export async function POST(request: Request) {
     // không chặn upload chính nếu lưu file gốc/bản xem trước thất bại
   }
 
+  let newColumnsAvailable = true;
   for (let i = 0; i < extracted.questions.length; i++) {
     const q = extracted.questions[i];
     const imageUrls: string[] = [];
@@ -284,7 +314,19 @@ export async function POST(request: Request) {
       }
     }
 
-    await supabase.from("questions").insert({
+    // Ảnh crop gốc của riêng câu này để giáo viên đối chiếu ở trang duyệt.
+    let sourceCropUrl: string | null = null;
+    const crop = crops?.get(i);
+    if (crop) {
+      const cropPath = `${exam.id}/src/q${i + 1}.png`;
+      const { error: cropError } = await supabase.storage.from("exam-images").upload(cropPath, crop, { contentType: "image/png" });
+      if (!cropError) sourceCropUrl = supabase.storage.from("exam-images").getPublicUrl(cropPath).data.publicUrl;
+    }
+
+    const flags = q.extraction_meta?.flags ?? [];
+    const notes = [q.raw_ocr_notes, ...flags].filter((x): x is string => Boolean(x && x.trim())).join(" • ") || null;
+
+    const row = {
       exam_id: exam.id,
       order_index: i,
       type: q.type,
@@ -297,9 +339,19 @@ export async function POST(request: Request) {
       short_answer_normalized: q.short_answer_normalized,
       score_rule: q.score_rule,
       max_score: q.max_score,
-      raw_ocr_notes: q.raw_ocr_notes,
+      raw_ocr_notes: notes,
       needs_review: true,
-    });
+    };
+    // Cột source_crop_url / extraction_meta cần migration 0007. Chưa chạy migration thì vẫn lưu
+    // câu hỏi bình thường (fail-open) — chỉ mất phần ảnh đối chiếu và cờ có cấu trúc.
+    let { error: insertError } = newColumnsAvailable
+      ? await supabase.from("questions").insert({ ...row, source_crop_url: sourceCropUrl, extraction_meta: q.extraction_meta ?? null })
+      : { error: null as { message: string } | null };
+    if (!newColumnsAvailable || (insertError && /source_crop_url|extraction_meta/.test(insertError.message))) {
+      newColumnsAvailable = false;
+      ({ error: insertError } = await supabase.from("questions").insert(row));
+    }
+    if (insertError) warnings.push(`Không lưu được câu ${i + 1}: ${insertError.message}`);
   }
 
   await cleanupTmp();

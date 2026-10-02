@@ -12,6 +12,20 @@ export interface SubStatement {
   answer: boolean;
 }
 
+/** Thông tin kiểm chứng của bước số hóa, lưu kèm từng câu (cột questions.extraction_meta). */
+export interface ExtractionMeta {
+  /** Các cảnh báo cụ thể cho câu này (hai lần đọc khác nhau, công thức lỗi, thiếu đáp án...). */
+  flags: string[];
+  /** true = chưa đọc được tự động, giáo viên PHẢI sửa trước khi xác nhận đề. */
+  blocking?: boolean;
+  /** Số lần đọc độc lập thành công (0-2). */
+  reads?: number;
+  /** Cách phân đoạn: "text_layer" = theo lớp chữ PDF. */
+  source?: string;
+  /** Bản đọc thứ hai (khi 2 lần đọc khác nhau) để giáo viên đối chiếu. */
+  alt?: { content_latex: string; options: QuestionOption[]; sub_statements: { key: string; text_latex: string }[] } | null;
+}
+
 export interface Question {
   id: string;
   exam_id: string;
@@ -28,10 +42,19 @@ export interface Question {
   max_score: number;
   needs_review: boolean;
   raw_ocr_notes: string | null;
+  /** Ảnh cắt gốc của riêng câu này (để đối chiếu). Có thể thiếu nếu chưa chạy migration 0007. */
+  source_crop_url?: string | null;
+  extraction_meta?: ExtractionMeta | null;
 }
 
 export type ExamStatus = "draft" | "reviewing" | "ready" | "archived";
-export type SourceBranch = "OMML_NATIVE" | "LEGACY_OLE_IMAGE" | "PDF_IMAGE_ONLY" | "PDF_TEXT_LAYER" | "MANUAL";
+export type SourceBranch =
+  | "OMML_NATIVE"
+  | "LEGACY_OLE_IMAGE"
+  | "PDF_IMAGE_ONLY"
+  | "PDF_TEXT_LAYER"
+  | "NO_MATH_DETECTED"
+  | "MANUAL";
 
 export interface ExamSettings {
   shuffle_questions: boolean;
@@ -132,5 +155,8 @@ export interface ExtractedExam {
     score_rule: ScoreRule;
     max_score: number;
     raw_ocr_notes: string | null;
+    /** Chỉ có khi đọc theo từng câu: khóa của ảnh crop gốc trong map ảnh cục bộ. */
+    source_crop?: string | null;
+    extraction_meta?: ExtractionMeta | null;
   }>;
 }
