@@ -313,7 +313,10 @@ const WMF_FORMULA_PROMPT = `Đây là 1 công thức toán được cắt ra t�
 const WMF_OCR_CONCURRENCY = 5;
 const WMF_OCR_MAX_COUNT = 60;
 
-export async function ocrWmfEquations(equations: Map<number, Buffer>): Promise<Map<number, string>> {
+export async function ocrWmfEquations(
+  equations: Map<number, Buffer>,
+  debugLog?: string[]
+): Promise<Map<number, string>> {
   const results = new Map<number, string>();
   let convertMetafileToDataUrl: (buf: ArrayBuffer) => Promise<string | null>;
   try {
@@ -322,7 +325,7 @@ export async function ocrWmfEquations(equations: Map<number, Buffer>): Promise<M
     // toàn bộ rơi về marker [CT?N] như cũ thay vì làm hỏng cả lần upload.
     ({ convertMetafileToDataUrl } = await import("emf-converter"));
   } catch (e) {
-    console.error("[ocrWmfEquations] import emf-converter failed:", e);
+    debugLog?.push(`import emf-converter failed: ${e instanceof Error ? e.stack ?? e.message : String(e)}`);
     return results;
   }
   const entries = [...equations].slice(0, WMF_OCR_MAX_COUNT);
@@ -331,15 +334,18 @@ export async function ocrWmfEquations(equations: Map<number, Buffer>): Promise<M
     try {
       const arrayBuffer = wmfBuf.buffer.slice(wmfBuf.byteOffset, wmfBuf.byteOffset + wmfBuf.byteLength) as ArrayBuffer;
       const dataUrl = await convertMetafileToDataUrl(arrayBuffer);
-      if (!dataUrl) { console.error(`[ocrWmfEquations] equation ${num}: convertMetafileToDataUrl returned null`); return; }
+      if (!dataUrl) {
+        debugLog?.push(`eq${num}: convertMetafileToDataUrl returned null`);
+        return;
+      }
       const base64 = dataUrl.split(",")[1];
       const response = await callGeminiWithImage(base64, WMF_FORMULA_PROMPT);
       const parsed = extractJson(response) as { latex?: string };
       const cleaned = parsed.latex?.trim().replace(/^\$+|\$+$/g, "").trim();
       if (cleaned) results.set(num, cleaned);
+      else debugLog?.push(`eq${num}: no latex in parsed response: ${JSON.stringify(parsed)}`);
     } catch (e) {
-      console.error(`[ocrWmfEquations] equation ${num} failed:`, e);
-      // bỏ qua, giữ nguyên marker [CT?N] cho công thức này
+      debugLog?.push(`eq${num} failed: ${e instanceof Error ? e.stack ?? e.message : String(e)}`);
     }
   }
 

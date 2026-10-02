@@ -30,10 +30,11 @@ function extOf(filename: string): string {
  * giữ nguyên marker. Trả về số công thức còn lại chưa giải quyết để báo cho giáo viên. */
 async function resolveWmfEquations(
   text: string,
-  equations: Map<number, Buffer>
+  equations: Map<number, Buffer>,
+  debugLog?: string[]
 ): Promise<{ text: string; unresolvedCount: number }> {
   if (equations.size === 0) return { text, unresolvedCount: 0 };
-  const latexByNumber = await ocrWmfEquations(equations);
+  const latexByNumber = await ocrWmfEquations(equations, debugLog);
   let unresolvedCount = 0;
   const resolved = text.replace(/\[CT\?(\d+)\]/g, (match, numStr) => {
     const latex = latexByNumber.get(Number(numStr));
@@ -81,12 +82,14 @@ export async function POST(request: Request) {
       sourceBranch = await detectDocxBranch(buffer);
       const result = await extractDocx(buffer);
       localImages = result.images;
-      const { text: resolvedText, unresolvedCount } = await resolveWmfEquations(result.text, result.equations);
+      const wmfDebug: string[] = [];
+      const { text: resolvedText, unresolvedCount } = await resolveWmfEquations(result.text, result.equations, wmfDebug);
       if (unresolvedCount > 0) {
         warnings.push(
           `Không tự đọc được ${unresolvedCount} công thức MathType cũ (ảnh WMF) — các vị trí đánh dấu [CT?N] trong câu hỏi cần giáo viên tự nhập LaTeX.`
         );
       }
+      if (process.env.WMF_DEBUG === "1") warnings.push(...wmfDebug.slice(0, 10).map((d) => `[wmf-debug] ${d}`));
       const structured = await structureExamText(resolvedText);
       extracted = normalizeExtractedExam({ ...structured, source_branch: sourceBranch });
     } else if (ext === "pdf") {
