@@ -52,11 +52,24 @@ function normalizeLiteralNewlines(text: string): string {
   return text.replace(/\\n(?!eq|abla)/g, "\n");
 }
 
-function extractPartLabel(text: string): { partLabel: string | null; rest: string } {
-  const partMatch = text.match(/^\s*(PHẦN\s+[IVXLC\d]+[^\n]*?)(?:\n+|\s*$)/i);
-  const partLabel = partMatch ? partMatch[1].trim() : null;
-  const afterPart = partMatch ? text.slice(partMatch[0].length) : text;
-  const rest = afterPart.replace(/^\s*Câu\s+\d+\s*[:.]\s*/i, "");
+export function extractPartLabel(text: string): { partLabel: string | null; rest: string } {
+  const partMatch = text.match(/^\s*(PHẦN\s+[IVXLC\d]+[^\n]*)/i);
+  let partLabel: string | null = null;
+  let afterPart = text;
+  if (partMatch) {
+    const line = partMatch[1];
+    // Khi AI viết liền không xuống dòng ("PHẦN III. Câu trắc nghiệm điền đáp án Câu 17. Cho
+    // hình...") thì "dòng" tiêu đề chính là CẢ câu hỏi — phải cắt tiêu đề ngay trước nhãn câu
+    // hỏi "Câu N." (chữ C hoa, có số, theo sau là . hoặc :) thay vì nuốt hết vào part_label
+    // (bug thực tế: nội dung câu rỗng, đề bài hiện thành tiêu đề phần với công thức chưa
+    // render). "Câu trắc nghiệm..." (không có số) và "từ câu 1 đến câu 12." (chữ c thường)
+    // không bị nhận nhầm.
+    const cut = line.search(/\s+Câu\s+\d+\s*[:.]/);
+    const headerLen = cut >= 0 ? cut : line.length;
+    partLabel = line.slice(0, headerLen).trim();
+    afterPart = text.slice(partMatch[0].length - line.length + headerLen);
+  }
+  const rest = afterPart.replace(/^\s+/, "").replace(/^Câu\s+\d+\s*[:.]\s*/i, "");
   return { partLabel, rest };
 }
 
@@ -143,7 +156,9 @@ export function normalizeExtractedExam(raw: unknown): ExtractedExam {
     return {
       type: question.type ?? "short_answer",
       content_latex,
-      part_label: partLabel,
+      // Ưu tiên tiêu đề tách được từ nội dung; nếu không có thì dùng part_label bước đọc
+      // trước đã xác định sẵn (đọc từng câu: tiêu đề phần lấy từ bước bố cục trang).
+      part_label: partLabel ?? (typeof question.part_label === "string" && question.part_label.trim() ? question.part_label.trim() : null),
       image_urls: normalizeImageUrls(question),
       options,
       sub_statements,
