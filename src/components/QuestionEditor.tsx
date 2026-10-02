@@ -71,6 +71,16 @@ export function QuestionEditor({ question }: { question: Question }) {
     if (data.image_urls) setQ({ ...q, image_urls: data.image_urls });
   }
 
+  /** Cho phép giáo viên copy 1 vùng ảnh (vd chụp màn hình đề gốc, Ctrl+C) rồi Ctrl+V dán
+   * thẳng vào đây thay ảnh — nhanh hơn nhiều so với lưu file ra đĩa rồi chọn file. */
+  function handlePasteImage(idx: number, e: React.ClipboardEvent) {
+    const item = Array.from(e.clipboardData.items).find((it) => it.type.startsWith("image/"));
+    if (!item) return;
+    e.preventDefault();
+    const file = item.getAsFile();
+    if (file) replaceImage(idx, file);
+  }
+
   return (
     <div className={`rounded-lg border bg-white p-5 shadow-sm ${q.needs_review ? "border-amber-400 ring-1 ring-amber-200" : "border-slate-200"}`}>
       <div className="mb-3 flex items-center justify-between">
@@ -89,7 +99,13 @@ export function QuestionEditor({ question }: { question: Question }) {
       {q.image_urls.length > 0 && (
         <div className="mb-3 flex flex-wrap gap-2">
           {q.image_urls.map((url, i) => (
-            <div key={i} className="relative">
+            <div
+              key={i}
+              tabIndex={0}
+              onPaste={(e) => handlePasteImage(i, e)}
+              title="Bấm vào đây rồi Ctrl+V để dán ảnh đã copy (vd chụp từ đề gốc)"
+              className="relative rounded-md outline-none focus:ring-2 focus:ring-blue-400"
+            >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={url} alt="" className="max-h-72 rounded-md border" />
               <label className="absolute bottom-1 right-1 cursor-pointer rounded bg-black/60 px-2 py-0.5 text-xs text-white hover:bg-black/80">

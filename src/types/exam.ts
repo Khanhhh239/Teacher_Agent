@@ -48,6 +48,8 @@ export interface Exam {
   status: ExamStatus;
   source_branch: SourceBranch | null;
   settings: ExamSettings;
+  original_file_url: string | null;
+  original_file_ext: string | null;
   created_at: string;
   updated_at: string;
 }

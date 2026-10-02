@@ -2,6 +2,8 @@ import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { QuestionEditor } from "@/components/QuestionEditor";
 import { ExamStatusControls } from "@/components/ExamStatusControls";
+import { ResizableSplitView } from "@/components/ResizableSplitView";
+import { OriginalFileViewer } from "@/components/OriginalFileViewer";
 import type { Exam, Question } from "@/types/exam";
 
 export default async function ExamReviewPage({
@@ -40,16 +42,31 @@ export default async function ExamReviewPage({
         />
       </div>
 
-      <div className="space-y-3">
-        {(questions as Question[] | null)?.map((q) => (
-          <QuestionEditor key={q.id} question={q} />
-        ))}
-        {!questions?.length && (
-          <p className="rounded-lg border border-dashed p-8 text-center text-sm text-slate-500">
-            Chưa có câu hỏi nào. Import từ pipeline hoặc thêm thủ công.
-          </p>
-        )}
-      </div>
+      <ResizableSplitView
+        left={
+          <div className="space-y-3">
+            {(questions as Question[] | null)?.map((q) => (
+              <QuestionEditor key={q.id} question={q} />
+            ))}
+            {!questions?.length && (
+              <p className="rounded-lg border border-dashed p-8 text-center text-sm text-slate-500">
+                Chưa có câu hỏi nào. Import từ pipeline hoặc thêm thủ công.
+              </p>
+            )}
+          </div>
+        }
+        right={
+          <div>
+            <p className="mb-2 text-xs font-medium text-slate-500">
+              Đề gốc — kéo thanh bên trái để thu/giãn khung này
+            </p>
+            <OriginalFileViewer
+              url={(exam as Exam).original_file_url}
+              ext={(exam as Exam).original_file_ext}
+            />
+          </div>
+        }
+      />
     </div>
   );
 }
