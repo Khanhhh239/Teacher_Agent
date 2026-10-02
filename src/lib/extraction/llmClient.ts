@@ -459,27 +459,12 @@ export async function extractAnswerKeyFromText(rawText: string, warnings?: strin
 }
 
 /** Đọc đáp án từ 1 ảnh (file đáp án dạng ảnh chụp, hoặc từng trang PDF đã render) — 1 lần
- * gọi Gemini vision / ảnh. Tự thử lại với temperature khác nếu gặp lỗi RECITATION (xem
- * ocrPdfPageWithRecitationRetry — cùng hiện tượng false-positive với nội dung đề/đáp án
- * công khai, không riêng gì nhánh câu hỏi). */
+ * gọi Gemini vision / ảnh. Không retry nhiều temperature khi gặp RECITATION — đã kiểm chứng
+ * thực tế là vô ích (xem ghi chú tại ocrPdfPageWithRecitationRetry), chỉ tốn lệnh gọi và dễ
+ * vượt rate limit. Việc tách đôi trang khi gặp RECITATION do extractAnswerKeyFromPageWithSplit
+ * đảm nhiệm ở lớp gọi. */
 export async function extractAnswerKeyFromImage(imageBase64: string, mimeType = "image/png", warnings?: string[]): Promise<AnswerKeyEntry[]> {
-  const temperatures = [0, 0.4, 0.8, 1.0];
-  let lastError: Error | null = null;
-  for (const temperature of temperatures) {
-    try {
-      return parseAnswerKeyResponse(await callGeminiWithImage(imageBase64, ANSWER_KEY_PROMPT, mimeType, warnings, temperature));
-    } catch (e) {
-      lastError = e instanceof Error ? e : new Error(String(e));
-      if (!lastError.message.includes("RECITATION")) throw lastError;
-      if (warnings) {
-        const w = "Gemini từ chối đọc 1 trang đáp án do nghi ngờ trùng bản quyền (recitation filter), hệ thống đã tự thử lại với cách đọc khác.";
-        if (!warnings.includes(w)) warnings.push(w);
-      }
-    }
-  }
-  throw new Error(
-    "RECITATION: Gemini liên tục từ chối đọc 1 trang đáp án vì nghi ngờ trùng tài liệu có bản quyền, dù đã thử nhiều cách khác nhau. Đây là giới hạn từ phía Google với tài liệu đã phổ biến rộng rãi, không phải lỗi hệ thống. Gợi ý: thử lại sau vài phút, hoặc dùng bản scan/chụp lại trang đó."
-  );
+  return parseAnswerKeyResponse(await callGeminiWithImage(imageBase64, ANSWER_KEY_PROMPT, mimeType, warnings, 0));
 }
 
 /** File đáp án dạng PDF nhiều trang — render từng trang rồi gọi Gemini vision riêng cho mỗi
@@ -595,39 +580,22 @@ async function ocrPdfPage(
  * trùng khớp với tài liệu có bản quyền đã biết (thực tế quan sát được: xảy ra cả ở TRANG
  * ĐẦU TIÊN, không riêng trang có ngữ cảnh nối tiếp từ trang trước như giả định ban đầu) —
  * với đề thi/tài liệu công khai (đề minh họa Bộ GD&ĐT...) đây gần như chắc chắn là false
- * positive vì nội dung hoàn toàn hợp pháp để trích xuất. Thử lại tối đa 2 lần với
- * temperature tăng dần (bộ lọc recitation nhạy với output y hệt ở temperature=0) và bỏ
- * ngữ cảnh trang trước (nếu có) ở lần thử cuối, trước khi chịu thua hẳn.
+ * positive vì nội dung hoàn toàn hợp pháp để trích xuất.
+ *
+ * ĐÃ KIỂM CHỨNG BẰNG SCRIPT GỌI THẲNG GEMINI API thực tế (không phải suy đoán): đổi
+ * temperature KHÔNG giúp ích gì — cùng 1 trang vẫn bị chặn kể cả ở temperature=1.0. Thứ duy
+ * nhất thực sự tránh được lỗi là CẮT NHỎ ảnh (xem processPageImage/split trong
+ * extractImagePages) — bộ lọc có vẻ dựa trên độ dài đoạn text khớp liên tục, ảnh nửa trang
+ * không đủ dài để khớp. Vì vậy ở đây chỉ thử 1 lần duy nhất (không lặp lại vô ích, tốn lệnh
+ * gọi Gemini và dễ dẫn tới lỗi 429 vượt rate limit khi phải xử lý nhiều trang) — việc tách
+ * đôi trang để xử lý tiếp do processPageImage đảm nhiệm ở lớp gọi.
  */
 async function ocrPdfPageWithRecitationRetry(
   pagePngBase64: string,
   prevTail: string | null,
   warnings?: string[]
 ): Promise<PdfPageResult> {
-  const temperatures = [0, 0.4, 0.8, 1.0];
-  let lastError: Error | null = null;
-  for (let i = 0; i < temperatures.length; i++) {
-    try {
-      // Bỏ ngữ cảnh trang trước ở lần thử cuối — ngữ cảnh dài lặp lại nguyên văn có thể là
-      // nguyên nhân kích hoạt bộ lọc, dù không phải lúc nào cũng vậy.
-      const tail = i === temperatures.length - 1 ? null : prevTail;
-      return await ocrPdfPage(pagePngBase64, tail, warnings, temperatures[i]);
-    } catch (e) {
-      lastError = e instanceof Error ? e : new Error(String(e));
-      if (!lastError.message.includes("RECITATION")) throw lastError;
-      if (warnings) {
-        const w = "Gemini từ chối đọc 1 trang do nghi ngờ trùng bản quyền (recitation filter), hệ thống đã tự thử lại với cách đọc khác.";
-        if (!warnings.includes(w)) warnings.push(w);
-      }
-    }
-  }
-  // Đã thử hết các cách (tăng temperature, bỏ ngữ cảnh) mà Gemini vẫn từ chối — với tài liệu
-  // đã công bố rộng rãi (vd đề minh họa chính thức của Bộ GD&ĐT đăng trên nhiều trang web),
-  // bộ lọc recitation của Google đôi khi khớp cứng bất kể cách hỏi, không có cách nào trong
-  // tầm kiểm soát của hệ thống đảm bảo né được 100%. Báo lỗi rõ ràng thay vì để JSON thô.
-  throw new Error(
-    "RECITATION: Gemini liên tục từ chối đọc 1 trang vì nghi ngờ trùng tài liệu có bản quyền, dù đã thử nhiều cách khác nhau. Đây là giới hạn từ phía Google với tài liệu đã phổ biến rộng rãi (vd đề thi chính thức đăng công khai), không phải lỗi hệ thống. Gợi ý: thử lại sau vài phút (bộ lọc có thể thay đổi theo thời gian), hoặc dùng bản scan/chụp lại trang đó thay vì file PDF tải từ nguồn có sẵn trên mạng."
-  );
+  return ocrPdfPage(pagePngBase64, prevTail, warnings, 0);
 }
 
 const CONTINUATION_MARKER = "[TIẾP TRANG TRƯỚC]";
