@@ -39,14 +39,16 @@ export function ExamPreviewModal({
           </button>
         </div>
 
-        <div className="min-h-0 flex-1 px-5 py-4">
-          <div className="mb-3">
+        <div className="flex min-h-0 flex-1 flex-col px-5 py-4">
+          <div className="mb-3 shrink-0">
             <h1 className="font-semibold">{exam.title}</h1>
             <p className="text-sm text-slate-500">
               {exam.subject} · {exam.duration_minutes} phút · {questions.length} câu
             </p>
           </div>
-          <QuestionAnswerSplit questions={splitQuestions} values={{}} />
+          <div className="min-h-0 flex-1">
+            <QuestionAnswerSplit questions={splitQuestions} values={{}} />
+          </div>
         </div>
 
         <div className="flex items-center justify-end gap-3 border-t px-5 py-4">

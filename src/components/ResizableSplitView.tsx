@@ -49,7 +49,7 @@ export function ResizableSplitView({
   }
 
   return (
-    <div ref={containerRef} className="flex min-h-[70vh] w-full">
+    <div ref={containerRef} className="flex h-full min-h-0 w-full">
       <div className="min-w-0 flex-1 overflow-y-auto pr-3" style={{ flexBasis: `${100 - rightWidthPct}%` }}>
         {left}
       </div>

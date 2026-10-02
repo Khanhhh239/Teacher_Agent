@@ -143,6 +143,10 @@ export async function buildImageQuestions(
     return b.segments[0]?.page ?? -1;
   }
 
+  // Nới thêm vài mm phía trên mỗi mảnh cắt để không hụt mất phần trên của chữ/công thức
+  // (vd "ax+b" của Câu 5) khi ranh giới câu nằm sát đỉnh dòng chữ.
+  const TOP_PAD_PX = Math.round((2.5 / 25.4) * RENDER_DPI);
+
   const cropBlock = async (block: QuestionBlock): Promise<Buffer> => {
     const parts: Buffer[] = [];
     for (const s of block.segments) {
@@ -151,8 +155,9 @@ export async function buildImageQuestions(
       const meta = await sharp(png).metadata();
       const W = meta.width ?? 0;
       const H = meta.height ?? 0;
-      const top = Math.max(0, Math.min(H - 1, Math.round(s.y0 * scale)));
-      const height = Math.max(8, Math.min(H - top, Math.round((s.y1 - s.y0) * scale)));
+      const naturalTop = Math.round(s.y0 * scale);
+      const top = Math.max(0, Math.min(H - 1, naturalTop - TOP_PAD_PX));
+      const height = Math.max(8, Math.min(H - top, Math.round((s.y1 - s.y0) * scale) + (naturalTop - top)));
       parts.push(await sharp(png).extract({ left: 0, top, width: W, height }).png().toBuffer());
     }
     if (parts.length === 1) return parts[0];
