@@ -11,6 +11,7 @@ import {
   mergeAnswerKeyIntoQuestions,
 } from "@/lib/extraction/llmClient";
 import { normalizeExtractedExam } from "@/lib/extraction/normalize";
+import { convertToPdf } from "@/lib/conversion/cloudconvert";
 
 export const runtime = "nodejs";
 // Gemini đôi khi mất 30-90s để sinh JSON dài (đề 20+ câu), cộng thêm tối đa 3 lần retry
@@ -58,11 +59,33 @@ export async function POST(request: Request) {
   try {
     if (ext === "docx") {
       sourceBranch = await detectDocxBranch(buffer);
-      const result = await extractDocx(buffer);
-      localImages = result.images;
-      warnings.push(...result.warnings);
-      const structured = await structureExamText(result.text);
-      extracted = normalizeExtractedExam({ ...structured, source_branch: sourceBranch });
+      if (sourceBranch === "LEGACY_OLE_IMAGE") {
+        // Công thức MathType/WMF cũ — 2 cách tự giải mã WMF trực tiếp trong Node đều thất
+        // bại trên Vercel (binary native lỗi, rồi thiếu font khi render SVG). Thay vào đó
+        // convert cả file sang PDF qua CloudConvert (chạy LibreOffice thật trên server họ,
+        // render công thức đúng như Word hiển thị), rồi đi qua pipeline PDF đã kiểm chứng.
+        try {
+          const pdfBuffer = await convertToPdf(buffer, file.name);
+          const { extracted: pdfExtracted, images } = await extractPdfPages(pdfBuffer);
+          localImages = images;
+          extracted = normalizeExtractedExam({ ...pdfExtracted, source_branch: "PDF_IMAGE_ONLY" });
+          sourceBranch = "PDF_IMAGE_ONLY";
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          warnings.push(`Không convert được sang PDF để đọc công thức MathType cũ (${message}) — dùng lại cách cũ, các công thức sẽ đánh dấu [CT?N] cần giáo viên tự nhập.`);
+          const result = await extractDocx(buffer);
+          localImages = result.images;
+          warnings.push(...result.warnings);
+          const structured = await structureExamText(result.text);
+          extracted = normalizeExtractedExam({ ...structured, source_branch: sourceBranch });
+        }
+      } else {
+        const result = await extractDocx(buffer);
+        localImages = result.images;
+        warnings.push(...result.warnings);
+        const structured = await structureExamText(result.text);
+        extracted = normalizeExtractedExam({ ...structured, source_branch: sourceBranch });
+      }
     } else if (ext === "pdf") {
       sourceBranch = "PDF_IMAGE_ONLY";
       const { extracted: pdfExtracted, images } = await extractPdfPages(buffer);
@@ -84,8 +107,21 @@ export async function POST(request: Request) {
   try {
     let answerKey;
     if (answerExt === "docx") {
-      const result = await extractDocx(answerBuffer);
-      answerKey = await extractAnswerKeyFromText(result.text);
+      const answerBranch = await detectDocxBranch(answerBuffer);
+      if (answerBranch === "LEGACY_OLE_IMAGE") {
+        try {
+          const pdfBuffer = await convertToPdf(answerBuffer, answerFile.name);
+          answerKey = await extractAnswerKeyFromPdf(pdfBuffer);
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          warnings.push(`Không convert được file đáp án sang PDF (${message}) — thử đọc trực tiếp, có thể thiếu công thức.`);
+          const result = await extractDocx(answerBuffer);
+          answerKey = await extractAnswerKeyFromText(result.text);
+        }
+      } else {
+        const result = await extractDocx(answerBuffer);
+        answerKey = await extractAnswerKeyFromText(result.text);
+      }
     } else if (answerExt === "pdf") {
       answerKey = await extractAnswerKeyFromPdf(answerBuffer);
     } else if (IMAGE_EXTS.has(answerExt)) {
