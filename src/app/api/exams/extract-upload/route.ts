@@ -83,6 +83,13 @@ export async function POST(request: Request) {
       const result = await extractDocx(buffer);
       localImages = result.images;
       const wmfDebug: string[] = [];
+      try {
+        const canvasMod = await import("@napi-rs/canvas");
+        const c = canvasMod.createCanvas(10, 10);
+        wmfDebug.push(`@napi-rs/canvas loaded OK, createCanvas worked, type=${typeof c}`);
+      } catch (e) {
+        wmfDebug.push(`@napi-rs/canvas load/use FAILED: ${e instanceof Error ? e.stack ?? e.message : String(e)}`);
+      }
       const { text: resolvedText, unresolvedCount } = await resolveWmfEquations(result.text, result.equations, wmfDebug);
       if (unresolvedCount > 0) {
         warnings.push(
