@@ -89,7 +89,11 @@ export async function POST(request: Request) {
           `Không tự đọc được ${unresolvedCount} công thức MathType cũ (ảnh WMF) — các vị trí đánh dấu [CT?N] trong câu hỏi cần giáo viên tự nhập LaTeX.`
         );
       }
-      if (process.env.WMF_DEBUG === "1") warnings.push(...wmfDebug.slice(0, 10).map((d) => `[wmf-debug] ${d}`));
+      if (process.env.WMF_DEBUG?.trim() === "1") warnings.push(...wmfDebug.slice(0, 10).map((d) => `[wmf-debug] ${d}`));
+      // Luôn kèm vài dòng chẩn đoán thô (không phụ thuộc biến môi trường) để tránh lặp lại
+      // tình huống không rõ vì sao debugLog không hiện ra — xóa dòng này sau khi xác định
+      // xong nguyên nhân thật.
+      warnings.push(`[diag] equations=${result.equations.size} debugLogLen=${wmfDebug.length} WMF_DEBUG=${JSON.stringify(process.env.WMF_DEBUG)}`);
       const structured = await structureExamText(resolvedText);
       extracted = normalizeExtractedExam({ ...structured, source_branch: sourceBranch });
     } else if (ext === "pdf") {
