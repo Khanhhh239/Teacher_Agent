@@ -123,6 +123,11 @@ export async function extractDocx(buf: Buffer): Promise<DocxExtractResult> {
         if (!handled) {
           textParts.push(` [CT?${equationCounter}] `);
         }
+        if (!warnings.length) {
+          warnings.push(
+            `File dùng công thức MathType cũ (ảnh WMF) — hệ thống web chưa tự OCR được loại này. Các vị trí đánh dấu [CT?N] trong câu hỏi cần giáo viên tự nhập LaTeX. Khuyến nghị cho lần sau: mở file trong Word, chọn "Save As" → PDF, rồi tải file PDF lên thay vì file Word để hệ thống tự OCR được toàn bộ công thức.`
+          );
+        }
       } else if (ns === W_NS && local === "drawing") {
         const blips = el.getElementsByTagNameNS(A_NS, "blip");
         if (blips.length > 0) {

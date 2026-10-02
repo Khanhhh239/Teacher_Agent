@@ -9,11 +9,9 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@napi-rs/canvas": "^1.0.10",
     "@supabase/ssr": "^0.12.7",
     "@supabase/supabase-js": "^2.117.2",
     "@xmldom/xmldom": "^0.9.12",
-    "emf-converter": "^4.6.10",
     "jszip": "^3.10.2",
     "katex": "^0.18.9",
     "mupdf": "^1.28.1",
