@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { detectDocxBranch, extractDocx } from "@/lib/extraction/docxExtract";
 import {
   structureExamText,
@@ -35,21 +36,50 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Chưa đăng nhập" }, { status: 401 });
   }
 
-  const formData = await request.formData();
-  const file = formData.get("file") as File | null;
-  const answerFile = formData.get("answer_file") as File | null;
-  const durationMinutes = Number(formData.get("duration_minutes") ?? 90);
-  if (!file) {
+  // Nhận đường dẫn Storage (file đã được trình duyệt upload thẳng lên Supabase Storage,
+  // bỏ qua giới hạn ~4.5MB request body của Vercel Hobby) thay vì nhận bytes file trực
+  // tiếp qua formData — xem src/app/dashboard/exams/new/page.tsx.
+  const body = await request.json();
+  const filePath: string | undefined = body.file_path;
+  const fileName: string | undefined = body.file_name;
+  const answerFilePath: string | undefined = body.answer_file_path;
+  const answerFileName: string | undefined = body.answer_file_name;
+  const durationMinutes = Number(body.duration_minutes ?? 90);
+  if (!filePath || !fileName) {
     return NextResponse.json({ error: "Thiếu file đề thi" }, { status: 400 });
   }
-  if (!answerFile) {
+  if (!answerFilePath || !answerFileName) {
     return NextResponse.json({ error: "Thiếu file đáp án — cần upload cả đề và đáp án" }, { status: 400 });
   }
 
-  const ext = extOf(file.name);
-  const answerExt = extOf(answerFile.name);
-  const buffer = Buffer.from(await file.arrayBuffer());
-  const answerBuffer = Buffer.from(await answerFile.arrayBuffer());
+  const admin = createAdminClient();
+  const tmpPaths = [filePath, answerFilePath];
+  async function cleanupTmp() {
+    await admin.storage.from("exam-images").remove(tmpPaths).catch(() => {});
+  }
+
+  const ext = extOf(fileName);
+  const answerExt = extOf(answerFileName);
+  let buffer: Buffer;
+  let answerBuffer: Buffer;
+  try {
+    const [fileDownload, answerDownload] = await Promise.all([
+      admin.storage.from("exam-images").download(filePath),
+      admin.storage.from("exam-images").download(answerFilePath),
+    ]);
+    if (fileDownload.error || !fileDownload.data) {
+      throw new Error(fileDownload.error?.message ?? "không tải được file đề thi từ storage");
+    }
+    if (answerDownload.error || !answerDownload.data) {
+      throw new Error(answerDownload.error?.message ?? "không tải được file đáp án từ storage");
+    }
+    buffer = Buffer.from(await fileDownload.data.arrayBuffer());
+    answerBuffer = Buffer.from(await answerDownload.data.arrayBuffer());
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    await cleanupTmp();
+    return NextResponse.json({ error: `Lỗi tải file đã upload: ${message}` }, { status: 500 });
+  }
 
   let extracted;
   let sourceBranch: string;
@@ -65,7 +95,7 @@ export async function POST(request: Request) {
         // convert cả file sang PDF qua CloudConvert (chạy LibreOffice thật trên server họ,
         // render công thức đúng như Word hiển thị), rồi đi qua pipeline PDF đã kiểm chứng.
         try {
-          const pdfBuffer = await convertToPdf(buffer, file.name);
+          const pdfBuffer = await convertToPdf(buffer, fileName);
           const { extracted: pdfExtracted, images } = await extractPdfPages(pdfBuffer);
           localImages = images;
           extracted = normalizeExtractedExam({ ...pdfExtracted, source_branch: "PDF_IMAGE_ONLY" });
@@ -97,10 +127,12 @@ export async function POST(request: Request) {
       localImages = images;
       extracted = normalizeExtractedExam({ ...imgExtracted, source_branch: sourceBranch });
     } else {
+      await cleanupTmp();
       return NextResponse.json({ error: "File đề thi chỉ hỗ trợ .docx, .pdf hoặc ảnh (.jpg/.png)" }, { status: 400 });
     }
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
+    await cleanupTmp();
     return NextResponse.json({ error: `Lỗi xử lý file đề thi: ${message}` }, { status: 500 });
   }
 
@@ -110,7 +142,7 @@ export async function POST(request: Request) {
       const answerBranch = await detectDocxBranch(answerBuffer);
       if (answerBranch === "LEGACY_OLE_IMAGE") {
         try {
-          const pdfBuffer = await convertToPdf(answerBuffer, answerFile.name);
+          const pdfBuffer = await convertToPdf(answerBuffer, answerFileName);
           answerKey = await extractAnswerKeyFromPdf(pdfBuffer);
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
@@ -127,6 +159,7 @@ export async function POST(request: Request) {
     } else if (IMAGE_EXTS.has(answerExt)) {
       answerKey = await extractAnswerKeyFromImage(answerBuffer.toString("base64"), `image/${answerExt === "jpg" ? "jpeg" : answerExt}`);
     } else {
+      await cleanupTmp();
       return NextResponse.json({ error: "File đáp án chỉ hỗ trợ .docx, .pdf hoặc ảnh (.jpg/.png)" }, { status: 400 });
     }
     if (answerKey.length === 0) {
@@ -135,6 +168,7 @@ export async function POST(request: Request) {
     extracted = { ...extracted, questions: mergeAnswerKeyIntoQuestions(extracted.questions, answerKey) };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
+    await cleanupTmp();
     return NextResponse.json({ error: `Lỗi xử lý file đáp án: ${message}` }, { status: 500 });
   }
 
@@ -152,6 +186,7 @@ export async function POST(request: Request) {
     .single();
 
   if (examError || !exam) {
+    await cleanupTmp();
     return NextResponse.json({ error: examError?.message ?? "Không tạo được đề thi" }, { status: 500 });
   }
 
@@ -211,5 +246,6 @@ export async function POST(request: Request) {
     });
   }
 
+  await cleanupTmp();
   return NextResponse.json({ exam_id: exam.id, question_count: extracted.questions.length, warnings });
 }

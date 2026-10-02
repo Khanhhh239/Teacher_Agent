@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
 
 const ACCEPTED_EXTS = ["docx", "pdf", "jpg", "jpeg", "png", "webp"];
 
@@ -100,12 +101,38 @@ export default function NewExamPage() {
     setWarnings([]);
 
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("answer_file", answerFile);
-      formData.append("duration_minutes", String(duration));
+      // Upload thẳng lên Supabase Storage từ trình duyệt (không qua body của Vercel
+      // function) để tránh giới hạn ~4.5MB request body của Vercel Hobby — chỉ gửi
+      // đường dẫn storage (rất nhỏ) tới API route, route sẽ tự tải file về xử lý.
+      const supabase = createClient();
+      const batchId = crypto.randomUUID();
 
-      const res = await fetch("/api/exams/extract-upload", { method: "POST", body: formData });
+      async function uploadTmp(f: File, slot: "exam" | "answer") {
+        const ext = extOf(f.name);
+        const path = `tmp-uploads/${batchId}/${slot}.${ext}`;
+        const { error: uploadError } = await supabase.storage.from("exam-images").upload(path, f, {
+          contentType: f.type || undefined,
+        });
+        if (uploadError) throw new Error(`Upload file ${slot === "exam" ? "đề thi" : "đáp án"} thất bại: ${uploadError.message}`);
+        return path;
+      }
+
+      const [filePath, answerFilePath] = await Promise.all([
+        uploadTmp(file, "exam"),
+        uploadTmp(answerFile, "answer"),
+      ]);
+
+      const res = await fetch("/api/exams/extract-upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          file_path: filePath,
+          file_name: file.name,
+          answer_file_path: answerFilePath,
+          answer_file_name: answerFile.name,
+          duration_minutes: duration,
+        }),
+      });
       const data = await res.json();
 
       if (!res.ok) {
