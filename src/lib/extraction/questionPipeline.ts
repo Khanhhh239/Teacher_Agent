@@ -247,13 +247,18 @@ export async function runQuestionPipeline(
 
     flags.push(...problemsOf(chosen));
 
+    // Hai lần đọc bất đồng về số hình: lấy khung hình của lần đọc thấy NHIỀU hình hơn (thiếu hình
+    // nghiêm trọng hơn dư hình — dư thì giáo viên xóa, thiếu thì học sinh không đủ dữ kiện làm bài).
+    const figureSource =
+      candidates.length === 2 && alt && alt.figure_boxes.length > chosen.figure_boxes.length ? alt : chosen;
+
     // Cắt hình minh họa từ chính ảnh crop của câu → hình luôn thuộc đúng câu này.
     const imageNames: string[] = [];
     const cm = await sharp(crop).metadata();
     const W = cm.width ?? 0;
     const H = cm.height ?? 0;
     let k = 0;
-    for (const fb of chosen.figure_boxes) {
+    for (const fb of figureSource.figure_boxes) {
       const [rx0, ry0, rx1, ry1] = fb.bbox;
       const m = 0.03;
       const x0 = Math.max(0, rx0 - (rx1 - rx0) * m);

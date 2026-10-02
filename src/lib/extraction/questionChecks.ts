@@ -54,7 +54,8 @@ export function normalizeReadResult(raw: unknown): ReadQuestion {
 
   return {
     type,
-    content_latex: String(o.content_latex ?? ""),
+    // Prompt dặn không chép nhãn "Câu N." nhưng đôi khi model vẫn chép — bỏ ngay để không lọt vào nội dung.
+    content_latex: String(o.content_latex ?? "").replace(/^\s*Câu\s*\d+\s*[.:]\s*/i, ""),
     options,
     sub_statements: subs,
     figure_boxes,
@@ -70,6 +71,11 @@ export function normalizeReadResult(raw: unknown): ReadQuestion {
 export function normForCompare(s: string): string {
   return s
     .normalize("NFC")
+    .replace(/\$/g, "") // ký hiệu bọc công thức $...$ không mang nghĩa nội dung ($5$ và 5 là một)
+    .replace(/[“”„‟«»]/g, '"')
+    .replace(/[‘’‚‛]/g, "'")
+    .replace(/\\vec\b/g, "\\overrightarrow")
+    .replace(/\\(?:ldots|cdots|dots)\b/g, "...")
     .replace(/\\(?:left|right|displaystyle|textstyle|bigl|bigr|Bigl|Bigr)\b/g, "")
     .replace(/\\[,;:! ]/g, "")
     .replace(/\\(?:dfrac|tfrac)\b/g, "\\frac")
@@ -165,6 +171,10 @@ export function structureProblems(q: ReadQuestion, markerChar = "¦"): string[] 
   }
   for (const o of q.options) if (!o.text_latex.trim()) out.push(`Phương án ${o.key} rỗng`);
   for (const s of q.sub_statements) if (!s.text_latex.trim()) out.push(`Ý ${s.key} rỗng`);
+  // Đề nhắc tới hình/đồ thị/bảng biến thiên mà không tách được hình nào → rất có thể bị mất hình.
+  if (q.figure_boxes.length === 0 && /(hình\s*(vẽ|bên|dưới|sau)|như\s+hình|đồ\s*thị|bảng\s*biến\s*thiên)/i.test(q.content_latex)) {
+    out.push("Đề nhắc tới hình/đồ thị/bảng biến thiên nhưng chưa tách được hình — kiểm tra ảnh gốc xem có thiếu hình không");
+  }
   const all = JSON.stringify(q);
   if (all.includes(markerChar)) out.push("Còn sót ký hiệu phân tách ¦");
   if (/\[IMAGE:/.test(all)) out.push("Còn sót marker [IMAGE:...]");
