@@ -321,7 +321,8 @@ export async function ocrWmfEquations(equations: Map<number, Buffer>): Promise<M
     // của @napi-rs/canvas (Vercel Linux khác Windows local) — nếu lỗi, trả về rỗng và để
     // toàn bộ rơi về marker [CT?N] như cũ thay vì làm hỏng cả lần upload.
     ({ convertMetafileToDataUrl } = await import("emf-converter"));
-  } catch {
+  } catch (e) {
+    console.error("[ocrWmfEquations] import emf-converter failed:", e);
     return results;
   }
   const entries = [...equations].slice(0, WMF_OCR_MAX_COUNT);
@@ -330,13 +331,14 @@ export async function ocrWmfEquations(equations: Map<number, Buffer>): Promise<M
     try {
       const arrayBuffer = wmfBuf.buffer.slice(wmfBuf.byteOffset, wmfBuf.byteOffset + wmfBuf.byteLength) as ArrayBuffer;
       const dataUrl = await convertMetafileToDataUrl(arrayBuffer);
-      if (!dataUrl) return;
+      if (!dataUrl) { console.error(`[ocrWmfEquations] equation ${num}: convertMetafileToDataUrl returned null`); return; }
       const base64 = dataUrl.split(",")[1];
       const response = await callGeminiWithImage(base64, WMF_FORMULA_PROMPT);
       const parsed = extractJson(response) as { latex?: string };
       const cleaned = parsed.latex?.trim().replace(/^\$+|\$+$/g, "").trim();
       if (cleaned) results.set(num, cleaned);
-    } catch {
+    } catch (e) {
+      console.error(`[ocrWmfEquations] equation ${num} failed:`, e);
       // bỏ qua, giữ nguyên marker [CT?N] cho công thức này
     }
   }
