@@ -289,6 +289,66 @@ function provider(): "auto" | "gemini" | "deepseek" {
   const p = (process.env.LLM_PROVIDER ?? "auto").toLowerCase();
   return p === "gemini" || p === "deepseek" ? p : "auto";
 }
+
+/**
+ * Công thức MathType cũ trong docx được lưu dạng ảnh WMF (Windows Metafile), không thể
+ * dùng LibreOffice để convert trên Vercel serverless (không có binary). Đã thử dùng
+ * `emf-converter` + @napi-rs/canvas (PNG qua canvas native) nhưng binary native đó không
+ * hoạt động đúng trên Vercel Linux (luôn trả null, thậm chí gọi trực tiếp còn làm
+ * treo request tới khi timeout) — đã bỏ cách đó. Thay vào đó dùng
+ * `convertMetafileToSvg` (thuần JS, KHÔNG cần canvas native) rồi rasterize SVG→PNG
+ * bằng `sharp` (đã dùng ổn định trong dự án này cho việc crop ảnh trang PDF) — vừa
+ * tránh được rủi ro binary native, vừa cho chất lượng ký hiệu (ngoặc, dấu bằng...)
+ * đúng hơn hẳn so với đường canvas (đã verify trực tiếp: không còn bị thiếu
+ * glyph hiện ô vuông trống như trước).
+ */
+const WMF_FORMULA_PROMPT = `Đây là 1 công thức toán được cắt ra từ ảnh công thức Word cũ (MathType/Equation Editor). Hãy đọc và viết lại thành LaTeX chính xác. Trả về DUY NHẤT 1 JSON theo schema: {"latex": "chuỗi LaTeX, không bao $...$"}.`;
+
+const WMF_OCR_CONCURRENCY = 5;
+const WMF_OCR_MAX_COUNT = 60;
+
+export async function ocrWmfEquations(
+  equations: Map<number, Buffer>,
+  debugLog?: string[]
+): Promise<Map<number, string>> {
+  const results = new Map<number, string>();
+  let convertMetafileToSvg: (buf: ArrayBuffer) => Promise<string | null>;
+  let sharp: (typeof import("sharp"))["default"];
+  try {
+    ({ convertMetafileToSvg } = await import("emf-converter"));
+    ({ default: sharp } = await import("sharp"));
+  } catch (e) {
+    debugLog?.push(`import failed: ${e instanceof Error ? e.stack ?? e.message : String(e)}`);
+    return results;
+  }
+  const entries = [...equations].slice(0, WMF_OCR_MAX_COUNT);
+
+  async function ocrOne(num: number, wmfBuf: Buffer): Promise<void> {
+    try {
+      const arrayBuffer = wmfBuf.buffer.slice(wmfBuf.byteOffset, wmfBuf.byteOffset + wmfBuf.byteLength) as ArrayBuffer;
+      const svg = await convertMetafileToSvg(arrayBuffer);
+      if (!svg) {
+        debugLog?.push(`eq${num}: convertMetafileToSvg returned null`);
+        return;
+      }
+      const png = await sharp(Buffer.from(svg)).png().toBuffer();
+      const base64 = png.toString("base64");
+      const response = await callGeminiWithImage(base64, WMF_FORMULA_PROMPT);
+      const parsed = extractJson(response) as { latex?: string };
+      const cleaned = parsed.latex?.trim().replace(/^\$+|\$+$/g, "").trim();
+      if (cleaned) results.set(num, cleaned);
+    } catch (e) {
+      debugLog?.push(`eq${num} failed: ${e instanceof Error ? e.stack ?? e.message : String(e)}`);
+    }
+  }
+
+  for (let i = 0; i < entries.length; i += WMF_OCR_CONCURRENCY) {
+    const batch = entries.slice(i, i + WMF_OCR_CONCURRENCY);
+    await Promise.all(batch.map(([num, buf]) => ocrOne(num, buf)));
+  }
+  return results;
+}
+
 export async function structureExamText(rawText: string): Promise<ExtractedExam> {
   const prompt = STRUCTURE_PROMPT + "\n\nNội dung đề thi cần cấu trúc hóa:\n---\n" + rawText + "\n---";
   const p = provider();
