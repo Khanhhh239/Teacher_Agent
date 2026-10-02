@@ -306,6 +306,14 @@ async function callGeminiRaw(model: string, parts: unknown[], warnings?: string[
         );
         const data = (await res.json()) as any; // eslint-disable-line @typescript-eslint/no-explicit-any
         if (!res.ok) throw new Error(`Gemini lỗi ${res.status}: ${JSON.stringify(data).slice(0, 300)}`);
+        const finishReason = data?.candidates?.[0]?.finishReason;
+        if (finishReason === "RECITATION") {
+          // Thông báo gốc của Gemini dài và lẫn JSON thô, không thân thiện — giữ nguyên từ
+          // khoá "RECITATION" để các lớp gọi retry (ocrPdfPageWithRecitationRetry,
+          // extractAnswerKeyFromImage) vẫn nhận diện được, nhưng phần hiển thị cho người
+          // dùng ngắn gọn, dễ hiểu hơn.
+          throw new Error("RECITATION: Gemini từ chối đọc nội dung trang này vì nghi ngờ trùng khớp tài liệu có bản quyền đã biết (thường gặp với đề thi chính thức đã được đăng tải công khai).");
+        }
         const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
         if (!text) throw new Error("Gemini không trả về nội dung: " + JSON.stringify(data).slice(0, 300));
         return text;
@@ -455,7 +463,7 @@ export async function extractAnswerKeyFromText(rawText: string, warnings?: strin
  * ocrPdfPageWithRecitationRetry — cùng hiện tượng false-positive với nội dung đề/đáp án
  * công khai, không riêng gì nhánh câu hỏi). */
 export async function extractAnswerKeyFromImage(imageBase64: string, mimeType = "image/png", warnings?: string[]): Promise<AnswerKeyEntry[]> {
-  const temperatures = [0, 0.3, 0.6];
+  const temperatures = [0, 0.4, 0.8, 1.0];
   let lastError: Error | null = null;
   for (const temperature of temperatures) {
     try {
@@ -469,7 +477,9 @@ export async function extractAnswerKeyFromImage(imageBase64: string, mimeType = 
       }
     }
   }
-  throw lastError ?? new Error("Gemini: lỗi RECITATION không xác định");
+  throw new Error(
+    "RECITATION: Gemini liên tục từ chối đọc 1 trang đáp án vì nghi ngờ trùng tài liệu có bản quyền, dù đã thử nhiều cách khác nhau. Đây là giới hạn từ phía Google với tài liệu đã phổ biến rộng rãi, không phải lỗi hệ thống. Gợi ý: thử lại sau vài phút, hoặc dùng bản scan/chụp lại trang đó."
+  );
 }
 
 /** File đáp án dạng PDF nhiều trang — render từng trang rồi gọi Gemini vision riêng cho mỗi
@@ -479,9 +489,17 @@ export async function extractAnswerKeyFromPdf(buffer: Buffer, warnings?: string[
   const { renderPdfPages } = await import("./pdfRender");
   const pages = renderPdfPages(buffer);
   const all: AnswerKeyEntry[] = [];
-  for (const page of pages) {
-    const entries = await extractAnswerKeyFromImage(page.toString("base64"), "image/png", warnings);
-    all.push(...entries);
+  for (let i = 0; i < pages.length; i++) {
+    try {
+      const entries = await extractAnswerKeyFromImage(pages[i].toString("base64"), "image/png", warnings);
+      all.push(...entries);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      if (!message.includes("RECITATION")) throw e;
+      // Bỏ qua riêng trang đáp án này (giống extractImagePages) thay vì làm hỏng cả file đáp
+      // án — các câu còn lại từ trang khác vẫn được đọc và ghép bình thường.
+      warnings?.push(`Trang ${i + 1} (đáp án): ${message} — đáp án các câu trên trang này sẽ bị thiếu, cần giáo viên tự điền tay.`);
+    }
   }
   return all;
 }
@@ -558,7 +576,7 @@ async function ocrPdfPageWithRecitationRetry(
   prevTail: string | null,
   warnings?: string[]
 ): Promise<PdfPageResult> {
-  const temperatures = [0, 0.3, 0.6];
+  const temperatures = [0, 0.4, 0.8, 1.0];
   let lastError: Error | null = null;
   for (let i = 0; i < temperatures.length; i++) {
     try {
@@ -575,7 +593,13 @@ async function ocrPdfPageWithRecitationRetry(
       }
     }
   }
-  throw lastError ?? new Error("Gemini: lỗi RECITATION không xác định");
+  // Đã thử hết các cách (tăng temperature, bỏ ngữ cảnh) mà Gemini vẫn từ chối — với tài liệu
+  // đã công bố rộng rãi (vd đề minh họa chính thức của Bộ GD&ĐT đăng trên nhiều trang web),
+  // bộ lọc recitation của Google đôi khi khớp cứng bất kể cách hỏi, không có cách nào trong
+  // tầm kiểm soát của hệ thống đảm bảo né được 100%. Báo lỗi rõ ràng thay vì để JSON thô.
+  throw new Error(
+    "RECITATION: Gemini liên tục từ chối đọc 1 trang vì nghi ngờ trùng tài liệu có bản quyền, dù đã thử nhiều cách khác nhau. Đây là giới hạn từ phía Google với tài liệu đã phổ biến rộng rãi (vd đề thi chính thức đăng công khai), không phải lỗi hệ thống. Gợi ý: thử lại sau vài phút (bộ lọc có thể thay đổi theo thời gian), hoặc dùng bản scan/chụp lại trang đó thay vì file PDF tải từ nguồn có sẵn trên mạng."
+  );
 }
 
 const CONTINUATION_MARKER = "[TIẾP TRANG TRƯỚC]";
@@ -635,7 +659,19 @@ async function extractImagePages(
     const pagePng = pagePngs[pageIndex];
     const { width, height } = await sharp(pagePng).metadata();
 
-    const result: PdfPageResult = await ocrPdfPageWithRecitationRetry(pagePng.toString("base64"), prevTail, warnings);
+    let result: PdfPageResult;
+    try {
+      result = await ocrPdfPageWithRecitationRetry(pagePng.toString("base64"), prevTail, warnings);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      if (!message.includes("RECITATION")) throw e;
+      // Trang này kẹt bộ lọc recitation ngay cả sau khi đã thử hết cách — bỏ qua riêng trang
+      // này thay vì làm hỏng CẢ đề thi (các trang khác vẫn đọc được bình thường). Giáo viên
+      // sẽ cần tự nhập tay các câu thuộc trang này ở bước duyệt.
+      warnings?.push(`Trang ${pageIndex + 1}: ${message} — các câu hỏi trên trang này sẽ bị thiếu, cần giáo viên tự nhập tay.`);
+      prevTail = null;
+      continue;
+    }
     if (pageIndex === 0) {
       title = result.title ?? title;
       subject = result.subject ?? subject;
