@@ -13,7 +13,15 @@ import type { ExtractionMeta } from "@/types/exam";
 import { callGeminiWithImage, extractJson, MARKER_CHAR, stripMarkers } from "./llmClient";
 import { waitForSlot } from "./rateLimiter";
 import { segmentFromLines, type PageLines, type QuestionBlock } from "./textLayerSegment";
-import { diffReads, mathProblems, normalizeReadResult, structureProblems, type ReadQuestion } from "./questionChecks";
+import {
+  checkAgainstLayer,
+  describeLayerCheck,
+  diffReads,
+  mathProblems,
+  normalizeReadResult,
+  structureProblems,
+  type ReadQuestion,
+} from "./questionChecks";
 
 export const MODEL_A = "gemini-3.5-flash-lite";
 export const MODEL_B = "gemini-3.1-flash-lite";
@@ -118,8 +126,10 @@ export async function runQuestionPipeline(
   const log = opts.log ?? (() => {});
 
   let seg;
+  let pageLines: PageLines[] = [];
   try {
-    seg = segmentFromLines(await extractPageLines(pdf));
+    pageLines = await extractPageLines(pdf);
+    seg = segmentFromLines(pageLines);
   } catch (e) {
     log(`text layer failed: ${e instanceof Error ? e.message : e}`);
     return null;
@@ -172,6 +182,17 @@ export async function runQuestionPipeline(
   let unread = 0;
   let disagreements = 0;
 
+  /** Chữ của lớp chữ PDF nằm trong vùng các đoạn của câu (dùng làm trọng tài độc lập). */
+  const layerTextOf = (block: QuestionBlock): string =>
+    block.segments
+      .flatMap((sg) =>
+        (pageLines[sg.page]?.lines ?? [])
+          .filter((l) => (l.y0 + l.y1) / 2 >= sg.y0 && (l.y0 + l.y1) / 2 <= sg.y1)
+          .sort((a, b) => a.y0 - b.y0 || a.x0 - b.x0)
+          .map((l) => l.text)
+      )
+      .join(" ");
+
   const processBlock = async (block: QuestionBlock, idx: number) => {
     const crop = crops[idx];
     cropMap.set(idx, crop);
@@ -189,6 +210,7 @@ export async function runQuestionPipeline(
     ]);
 
     const flags: string[] = [];
+    const layerText = layerTextOf(block);
     const candidates = [A, B].filter((r): r is ReadOutcome & { read: ReadQuestion } => r.read !== null);
     const problemsOf = (r: ReadQuestion) => [...structureProblems(r), ...mathProblems(r)];
 
@@ -198,8 +220,11 @@ export async function runQuestionPipeline(
       const diff = diffReads(A.read!, B.read!);
       const pa = problemsOf(A.read!);
       const pb = problemsOf(B.read!);
-      // Hai bản khác nhau → ưu tiên bản ít lỗi hơn (cấu trúc/cú pháp), hòa thì lấy lần đọc A.
-      chosen = pb.length < pa.length ? B.read! : A.read!;
+      // Hai bản khác nhau → trọng tài đầu tiên là LỚP CHỮ của PDF (bản nào khớp chữ/số của đề gốc
+      // hơn), rồi tới số lỗi cấu trúc/cú pháp, hòa thì lấy lần đọc A.
+      const la = checkAgainstLayer(A.read!, layerText).score;
+      const lb = checkAgainstLayer(B.read!, layerText).score;
+      chosen = lb < la ? B.read! : la < lb ? A.read! : pb.length < pa.length ? B.read! : A.read!;
       alt = chosen === A.read ? B.read! : A.read!;
       if (diff.length > 0) {
         disagreements++;
@@ -246,6 +271,8 @@ export async function runQuestionPipeline(
     }
 
     flags.push(...problemsOf(chosen));
+    // Đối chiếu bản được chọn với lớp chữ gốc (bắt cả lỗi mà cả 2 lần đọc cùng mắc).
+    flags.push(...describeLayerCheck(checkAgainstLayer(chosen, layerText)));
 
     // Hai lần đọc bất đồng về số hình: lấy khung hình của lần đọc thấy NHIỀU hình hơn (thiếu hình
     // nghiêm trọng hơn dư hình — dư thì giáo viên xóa, thiếu thì học sinh không đủ dữ kiện làm bài).

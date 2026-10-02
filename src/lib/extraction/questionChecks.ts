@@ -83,7 +83,8 @@ export function normForCompare(s: string): string {
     .replace(/([\^_])\{(\w)\}/g, "$1$2")
     .replace(/\\(?:leqslant|le)\b/g, "\\leq")
     .replace(/\\(?:geqslant|ge)\b/g, "\\geq")
-    .replace(/\\(?:vert|lvert|rvert)\b/g, "|")
+    .replace(/\\(?:vert|lvert|rvert|mid)\b/g, "|")
+    .replace(/\\%/g, "%")
     .replace(/\s+/g, "")
     .replace(/[.,;:]+$/, "");
 }
@@ -118,9 +119,6 @@ export function diffReads(a: ReadQuestion, b: ReadQuestion): string[] {
   };
   compareList("Phương án", a.options, b.options);
   compareList("Ý", a.sub_statements, b.sub_statements);
-  if (a.figure_boxes.length !== b.figure_boxes.length) {
-    out.push(`Số hình phát hiện khác nhau (${a.figure_boxes.length} và ${b.figure_boxes.length})`);
-  }
   return out;
 }
 
@@ -172,12 +170,74 @@ export function structureProblems(q: ReadQuestion, markerChar = "¦"): string[] 
   for (const o of q.options) if (!o.text_latex.trim()) out.push(`Phương án ${o.key} rỗng`);
   for (const s of q.sub_statements) if (!s.text_latex.trim()) out.push(`Ý ${s.key} rỗng`);
   // Đề nhắc tới hình/đồ thị/bảng biến thiên mà không tách được hình nào → rất có thể bị mất hình.
-  if (q.figure_boxes.length === 0 && /(hình\s*(vẽ|bên|dưới|sau)|như\s+hình|đồ\s*thị|bảng\s*biến\s*thiên)/i.test(q.content_latex)) {
+  if (q.figure_boxes.length === 0 && /(hình\s*(vẽ|bên|dưới|sau)|như\s+hình|đồ\s*thị[^.]{0,40}hình|bảng\s*biến\s*thiên\s*(sau|dưới|như))/i.test(q.content_latex)) {
     out.push("Đề nhắc tới hình/đồ thị/bảng biến thiên nhưng chưa tách được hình — kiểm tra ảnh gốc xem có thiếu hình không");
   }
   const all = JSON.stringify(q);
   if (all.includes(markerChar)) out.push("Còn sót ký hiệu phân tách ¦");
   if (/\[IMAGE:/.test(all)) out.push("Còn sót marker [IMAGE:...]");
   if (/PHẦN\s+[IVXLC\d]+\./.test(q.content_latex)) out.push("Nội dung còn lẫn tiêu đề PHẦN");
+  return out;
+}
+
+
+// ---------------------------------------------------------------------------------------------
+// Đối chiếu với LỚP CHỮ của PDF (trọng tài độc lập, không tốn token)
+// ---------------------------------------------------------------------------------------------
+
+export interface LayerCheck {
+  /** Từ tiếng Việt có trong bản đọc nhưng KHÔNG có trong đề gốc (đọc sai/bịa). */
+  wrongWords: string[];
+  /** Từ có trong đề gốc nhưng thiếu trong bản đọc (bị bỏ sót). */
+  missingWords: string[];
+  /** Số (>= 3 chữ số) lệch giữa bản đọc và đề gốc. */
+  numberMismatches: string[];
+  score: number;
+}
+
+const WORD_STOPLIST = new Set(["câu", "phần", "trang"]);
+
+function proseWords(s: string): string[] {
+  const noMath = s.replace(/\$[^$]*\$/g, " ").replace(/\\[A-Za-z]+/g, " ");
+  return noMath.normalize("NFC").toLowerCase().match(/\p{L}{3,}/gu) ?? [];
+}
+
+function allWordSet(s: string): Set<string> {
+  return new Set(s.normalize("NFC").toLowerCase().replace(/\\/g, " ").match(/\p{L}{3,}/gu) ?? []);
+}
+
+function numbersOf(s: string): string[] {
+  // Gộp "7 500 000", "7.500.000" thành 7500000 trước khi so.
+  const t = s.replace(/(?<=\d)[ .,](?=\d{3}(?!\d))/g, "");
+  return t.match(/\d{3,}/g) ?? [];
+}
+
+/**
+ * So bản đọc với chữ trong lớp chữ của PDF cùng vùng câu hỏi. Công thức toán trong lớp chữ thường bị
+ * vỡ nên chỉ so TỪ tiếng Việt (>= 3 chữ cái) và SỐ (>= 3 chữ số) — đủ để bắt các lỗi hay gặp: mất chữ
+ * ("Kiến sư" thay vì "Kiến trúc sư"), sai dấu ("vecto" thay vì "vectơ"), sai chữ số (7500000 vs 700000).
+ */
+export function checkAgainstLayer(read: ReadQuestion, layerText: string): LayerCheck {
+  const readText = [read.content_latex, ...read.options.map((o) => o.text_latex), ...read.sub_statements.map((s) => s.text_latex)].join(" ");
+  const layerWords = allWordSet(layerText);
+  const readAllWords = allWordSet(readText);
+
+  const wrongWords = [...new Set(proseWords(readText))].filter((w) => !layerWords.has(w) && !WORD_STOPLIST.has(w));
+  const missingWords = [...layerWords].filter((w) => !readAllWords.has(w) && !WORD_STOPLIST.has(w));
+
+  const layerNums = new Set(numbersOf(layerText));
+  const readNums = new Set(numbersOf(readText));
+  const numberMismatches = [
+    ...[...readNums].filter((n) => !layerNums.has(n)).map((n) => `${n} (có trong bản đọc, không có trong đề gốc)`),
+    ...[...layerNums].filter((n) => !readNums.has(n)).map((n) => `${n} (có trong đề gốc, thiếu trong bản đọc)`),
+  ];
+  return { wrongWords, missingWords, numberMismatches, score: wrongWords.length + missingWords.length + numberMismatches.length };
+}
+
+export function describeLayerCheck(c: LayerCheck): string[] {
+  const out: string[] = [];
+  if (c.wrongWords.length) out.push(`Từ không khớp lớp chữ gốc của PDF: ${c.wrongWords.slice(0, 5).join(", ")}`);
+  if (c.missingWords.length) out.push(`Từ có trong đề gốc nhưng thiếu trong bản số hóa: ${c.missingWords.slice(0, 5).join(", ")}`);
+  if (c.numberMismatches.length) out.push(`Số lệch so với đề gốc: ${c.numberMismatches.slice(0, 4).join("; ")}`);
   return out;
 }
