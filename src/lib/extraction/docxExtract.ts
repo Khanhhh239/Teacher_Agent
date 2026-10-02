@@ -15,6 +15,7 @@ export type DocxBranch = "OMML_NATIVE" | "LEGACY_OLE_IMAGE" | "NO_MATH_DETECTED"
 export interface DocxExtractResult {
   text: string;
   images: Map<string, Buffer>; // filename -> ảnh minh họa thật (w:drawing)
+  equations: Map<number, Buffer>; // số thứ tự [CT?N] -> ảnh WMF công thức MathType cũ (OCR ở lớp gọi, xem llmClient.ocrWmfEquations)
   warnings: string[];
   branch: DocxBranch;
 }
@@ -64,6 +65,7 @@ export async function extractDocx(buf: Buffer): Promise<DocxExtractResult> {
   const body = doc.getElementsByTagNameNS(W_NS, "body")[0];
 
   const images = new Map<string, Buffer>();
+  const equations = new Map<number, Buffer>();
   const warnings: string[] = [];
   const textParts: string[] = [];
   let equationCounter = 0;
@@ -108,9 +110,11 @@ export async function extractDocx(buf: Buffer): Promise<DocxExtractResult> {
           if (target) {
             const wmfBuf = await resolveMedia(target);
             if (wmfBuf) {
-              // Marker ngắn gọn [CT?N] — giải thích đầy đủ chỉ nằm trong warnings (hiện 1 lần
-              // ở đầu trang), KHÔNG lặp lại nguyên câu dài cho mỗi công thức (từng làm UI rối,
-              // một câu hỏi có 5-10 công thức thiếu sẽ ra cả đoạn văn dài không đọc nổi).
+              // Marker ngắn gọn [CT?N] giữ chỗ trong text — OCR thật diễn ra ở llmClient.ts
+              // (ocrWmfEquations, chạy sau khi extractDocx trả về) rồi thay thế marker bằng
+              // LaTeX thật trước khi gọi structureExamText. Lưu ảnh WMF theo đúng số N để lớp
+              // gọi ghép lại đúng vị trí.
+              equations.set(equationCounter, wmfBuf);
               textParts.push(` [CT?${equationCounter}] `);
               handled = true;
             }
@@ -118,11 +122,6 @@ export async function extractDocx(buf: Buffer): Promise<DocxExtractResult> {
         }
         if (!handled) {
           textParts.push(` [CT?${equationCounter}] `);
-        }
-        if (!warnings.length) {
-          warnings.push(
-            `File dùng công thức MathType cũ (ảnh WMF) — hệ thống web chưa tự OCR được loại này. Các vị trí đánh dấu [CT?N] trong câu hỏi cần giáo viên tự nhập LaTeX. Khuyến nghị cho lần sau: mở file trong Word, chọn "Save As" → PDF, rồi tải file PDF lên thay vì file Word để hệ thống tự OCR được toàn bộ công thức.`
-          );
         }
       } else if (ns === W_NS && local === "drawing") {
         const blips = el.getElementsByTagNameNS(A_NS, "blip");
@@ -152,5 +151,5 @@ export async function extractDocx(buf: Buffer): Promise<DocxExtractResult> {
   await walk(body);
   void paragraphs;
 
-  return { text: textParts.join(""), images, warnings, branch };
+  return { text: textParts.join(""), images, equations, warnings, branch };
 }

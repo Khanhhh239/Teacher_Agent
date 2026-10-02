@@ -9,6 +9,7 @@ import {
   extractAnswerKeyFromPdf,
   extractAnswerKeyFromImage,
   mergeAnswerKeyIntoQuestions,
+  ocrWmfEquations,
 } from "@/lib/extraction/llmClient";
 import { normalizeExtractedExam } from "@/lib/extraction/normalize";
 
@@ -23,6 +24,26 @@ const IMAGE_EXTS = new Set(["jpg", "jpeg", "png", "webp"]);
 
 function extOf(filename: string): string {
   return filename.split(".").pop()?.toLowerCase() ?? "";
+}
+
+/** Thay [CT?N] bằng LaTeX thật ($...$) đã OCR được từ ảnh WMF — công thức nào OCR lỗi thì
+ * giữ nguyên marker. Trả về số công thức còn lại chưa giải quyết để báo cho giáo viên. */
+async function resolveWmfEquations(
+  text: string,
+  equations: Map<number, Buffer>
+): Promise<{ text: string; unresolvedCount: number }> {
+  if (equations.size === 0) return { text, unresolvedCount: 0 };
+  const latexByNumber = await ocrWmfEquations(equations);
+  let unresolvedCount = 0;
+  const resolved = text.replace(/\[CT\?(\d+)\]/g, (match, numStr) => {
+    const latex = latexByNumber.get(Number(numStr));
+    if (latex === undefined) {
+      unresolvedCount++;
+      return match;
+    }
+    return ` $${latex}$ `;
+  });
+  return { text: resolved, unresolvedCount };
 }
 
 export async function POST(request: Request) {
@@ -60,8 +81,13 @@ export async function POST(request: Request) {
       sourceBranch = await detectDocxBranch(buffer);
       const result = await extractDocx(buffer);
       localImages = result.images;
-      warnings.push(...result.warnings);
-      const structured = await structureExamText(result.text);
+      const { text: resolvedText, unresolvedCount } = await resolveWmfEquations(result.text, result.equations);
+      if (unresolvedCount > 0) {
+        warnings.push(
+          `Không tự đọc được ${unresolvedCount} công thức MathType cũ (ảnh WMF) — các vị trí đánh dấu [CT?N] trong câu hỏi cần giáo viên tự nhập LaTeX.`
+        );
+      }
+      const structured = await structureExamText(resolvedText);
       extracted = normalizeExtractedExam({ ...structured, source_branch: sourceBranch });
     } else if (ext === "pdf") {
       sourceBranch = "PDF_IMAGE_ONLY";
@@ -85,7 +111,8 @@ export async function POST(request: Request) {
     let answerKey;
     if (answerExt === "docx") {
       const result = await extractDocx(answerBuffer);
-      answerKey = await extractAnswerKeyFromText(result.text);
+      const { text: resolvedAnswerText } = await resolveWmfEquations(result.text, result.equations);
+      answerKey = await extractAnswerKeyFromText(resolvedAnswerText);
     } else if (answerExt === "pdf") {
       answerKey = await extractAnswerKeyFromPdf(answerBuffer);
     } else if (IMAGE_EXTS.has(answerExt)) {

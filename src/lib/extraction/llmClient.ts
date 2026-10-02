@@ -289,6 +289,58 @@ function provider(): "auto" | "gemini" | "deepseek" {
   const p = (process.env.LLM_PROVIDER ?? "auto").toLowerCase();
   return p === "gemini" || p === "deepseek" ? p : "auto";
 }
+/**
+ * Công thức MathType cũ trong docx được lưu dạng ảnh WMF (Windows Metafile) nhúng không thể
+ * dùng LibreOffice để convert sang PNG trên Vercel serverless (không có binary) — đây là
+ * giới hạn đã biết từ đầu dự án. Thư viện `emf-converter` (thuần JS, không cần binary
+ * ngoài) decode WMF thành PNG trực tiếp trong Node — đã verify thực tế: vài ký hiệu đặc
+ * biệt (ngoặc, dấu so sánh từ font Symbol cũ của Equation Editor 3.0) hiện thành ô vuông
+ * trống do thiếu glyph, nhưng Gemini vision vẫn tự suy luận đúng ký hiệu từ ngữ cảnh
+ * toán học (vd ô vuông giữa "P" và "B" được đọc đúng thành dấu ngoặc). Kết quả: thay
+ * được nhiều marker [CT?N] bằng LaTeX thật thay vì để trống cho giáo viên tự nhập tay.
+ */
+const WMF_FORMULA_PROMPT = `Đây là 1 công thức toán được cắt ra từ ảnh công thức Word cũ (MathType/Equation Editor), có thể bị lỗi font hiện vài ký hiệu (ngoặc, dấu so sánh, ký hiệu Hy Lạp...) thành ô vuông trống hoặc ký tự lạ. Hãy đọc và viết lại thành LaTeX, TỰ SUY LUẬN ký hiệu đúng dựa vào ngữ cảnh toán học xung quanh (vd ô vuông giữa 2 biến thường là phép toán hoặc quan hệ như =, <, \\in, |...). Trả về DUY NHẤT 1 JSON theo schema: {"latex": "chuỗi LaTeX, không bao $...$"}.`;
+
+/**
+ * OCR hàng loạt các ảnh công thức WMF (từ nhánh LEGACY_OLE_IMAGE của docxExtract.ts) —
+ * mỗi công thức là 1 lần gọi Gemini vision riêng (không ghép chung vì mỗi ảnh rất nhỏ,
+ * ghép chung dễ lẫn lộn thứ tự). Chạy song song giới hạn (không tuần tự từng cái — đã
+ * gặp thực tế 1 file có tới 129 công thức, chạy tuần tự sẽ mất vài phút và có nguy cơ
+ * vượt maxDuration của route) nhưng giới hạn số lượng tối đa OCR để không nổ quota/thời
+ * gian cho những file cực đoan nhiều công thức — công thức vưỡt cap hoặc OCR lỗi thì bỏ
+ * qua (giữ nguyên marker [CT?N] làm lưới an toàn) thay vì làm hỏng cả lần upload.
+ */
+const WMF_OCR_CONCURRENCY = 5;
+const WMF_OCR_MAX_COUNT = 60;
+
+export async function ocrWmfEquations(equations: Map<number, Buffer>): Promise<Map<number, string>> {
+  const { convertMetafileToDataUrl } = await import("emf-converter");
+  const results = new Map<number, string>();
+  const entries = [...equations].slice(0, WMF_OCR_MAX_COUNT);
+
+  async function ocrOne(num: number, wmfBuf: Buffer): Promise<void> {
+    try {
+      const arrayBuffer = wmfBuf.buffer.slice(wmfBuf.byteOffset, wmfBuf.byteOffset + wmfBuf.byteLength) as ArrayBuffer;
+      const dataUrl = await convertMetafileToDataUrl(arrayBuffer);
+      if (!dataUrl) return;
+      const base64 = dataUrl.split(",")[1];
+      const response = await callGeminiWithImage(base64, WMF_FORMULA_PROMPT);
+      const parsed = extractJson(response) as { latex?: string };
+      const cleaned = parsed.latex?.trim().replace(/^\$+|\$+$/g, "").trim();
+      if (cleaned) results.set(num, cleaned);
+    } catch {
+      // bỏ qua, giữ nguyên marker [CT?N] cho công thức này
+    }
+  }
+
+  for (let i = 0; i < entries.length; i += WMF_OCR_CONCURRENCY) {
+    const batch = entries.slice(i, i + WMF_OCR_CONCURRENCY);
+    await Promise.all(batch.map(([num, buf]) => ocrOne(num, buf)));
+  }
+  return results;
+}
+
+
 
 export async function structureExamText(rawText: string): Promise<ExtractedExam> {
   const prompt = STRUCTURE_PROMPT + "\n\nNội dung đề thi cần cấu trúc hóa:\n---\n" + rawText + "\n---";
