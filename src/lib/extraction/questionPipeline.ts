@@ -216,6 +216,7 @@ export async function runQuestionPipeline(
 
     let chosen: ReadQuestion | null = null;
     let alt: ReadQuestion | null = null;
+    let disagreed = false;
     if (candidates.length === 2) {
       const diff = diffReads(A.read!, B.read!);
       const pa = problemsOf(A.read!);
@@ -227,6 +228,7 @@ export async function runQuestionPipeline(
       chosen = lb < la ? B.read! : la < lb ? A.read! : pb.length < pa.length ? B.read! : A.read!;
       alt = chosen === A.read ? B.read! : A.read!;
       if (diff.length > 0) {
+        disagreed = true;
         disagreements++;
         flags.push("Hai lần đọc (2 model) KHÁC NHAU — so với ảnh gốc để chọn bản đúng:");
         flags.push(...diff.slice(0, 4));
@@ -272,7 +274,7 @@ export async function runQuestionPipeline(
 
     flags.push(...problemsOf(chosen));
     // Đối chiếu bản được chọn với lớp chữ gốc (bắt cả lỗi mà cả 2 lần đọc cùng mắc).
-    flags.push(...describeLayerCheck(checkAgainstLayer(chosen, layerText)));
+    flags.push(...describeLayerCheck(checkAgainstLayer(chosen, layerText), candidates.length < 2 || disagreed));
 
     // Hai lần đọc bất đồng về số hình: lấy khung hình của lần đọc thấy NHIỀU hình hơn (thiếu hình
     // nghiêm trọng hơn dư hình — dư thì giáo viên xóa, thiếu thì học sinh không đủ dữ kiện làm bài).

@@ -190,12 +190,16 @@ export interface LayerCheck {
   wrongWords: string[];
   /** Từ có trong đề gốc nhưng thiếu trong bản đọc (bị bỏ sót). */
   missingWords: string[];
+  /** Cặp [từ trong bản đọc, từ trong đề gốc] chỉ khác nhau 1 ký tự — mơ hồ: lỗi của bản đọc hoặc lỗi của chính lớp chữ. */
+  ambiguousPairs: [string, string][];
   /** Số (>= 3 chữ số) lệch giữa bản đọc và đề gốc. */
   numberMismatches: string[];
   score: number;
 }
 
 const WORD_STOPLIST = new Set(["câu", "phần", "trang"]);
+/** Ký tự rác của mũi tên véc-tơ trong lớp chữ (uur, uuur, uuuur...) — không phải từ thật. */
+const isGlyphNoise = (w: string) => /^u{2,}r?$/.test(w);
 
 function proseWords(s: string): string[] {
   const noMath = s.replace(/\$[^$]*\$/g, " ").replace(/\\[A-Za-z]+/g, " ");
@@ -206,38 +210,71 @@ function allWordSet(s: string): Set<string> {
   return new Set(s.normalize("NFC").toLowerCase().replace(/\\/g, " ").match(/\p{L}{3,}/gu) ?? []);
 }
 
-function numbersOf(s: string): string[] {
-  // Gộp "7 500 000", "7.500.000" thành 7500000 trước khi so.
-  const t = s.replace(/(?<=\d)[ .,](?=\d{3}(?!\d))/g, "");
-  return t.match(/\d{3,}/g) ?? [];
+function oneSubstitution(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i] && ++diff > 1) return false;
+  return diff === 1;
 }
+
+/**
+ * Số có >= 3 chữ số, viết liền sau khi bỏ dấu ngăn cách nghìn/thập phân. Việc kiểm tra "có nằm trong
+ * chuỗi chữ số của phía bên kia hay không" làm cho phép so khớp miễn nhiễm với kiểu viết (7 500000,
+ * 7\,500\,000, 7.500.000) và với việc dòng bị ngắt giữa số.
+ */
+function numberTokens(s: string): string[] {
+  const t = s.replace(/\\[,;! ]|\{,\}/g, " ");
+  return (t.match(/\d+(?:[ .,]\d+)*/g) ?? []).map((x) => x.replace(/\D/g, "")).filter((x) => x.length >= 3);
+}
+const digitStream = (s: string) => s.replace(/\D+/g, "");
 
 /**
  * So bản đọc với chữ trong lớp chữ của PDF cùng vùng câu hỏi. Công thức toán trong lớp chữ thường bị
  * vỡ nên chỉ so TỪ tiếng Việt (>= 3 chữ cái) và SỐ (>= 3 chữ số) — đủ để bắt các lỗi hay gặp: mất chữ
  * ("Kiến sư" thay vì "Kiến trúc sư"), sai dấu ("vecto" thay vì "vectơ"), sai chữ số (7500000 vs 700000).
+ * Lớp chữ cũng có lỗi riêng (đã gặp "iượt" cho "lượt") nên cặp từ chỉ khác 1 ký tự được xếp riêng.
  */
 export function checkAgainstLayer(read: ReadQuestion, layerText: string): LayerCheck {
   const readText = [read.content_latex, ...read.options.map((o) => o.text_latex), ...read.sub_statements.map((s) => s.text_latex)].join(" ");
   const layerWords = allWordSet(layerText);
   const readAllWords = allWordSet(readText);
 
-  const wrongWords = [...new Set(proseWords(readText))].filter((w) => !layerWords.has(w) && !WORD_STOPLIST.has(w));
-  const missingWords = [...layerWords].filter((w) => !readAllWords.has(w) && !WORD_STOPLIST.has(w));
+  let wrongWords = [...new Set(proseWords(readText))].filter((w) => !layerWords.has(w) && !WORD_STOPLIST.has(w));
+  let missingWords = [...layerWords].filter((w) => !readAllWords.has(w) && !WORD_STOPLIST.has(w) && !isGlyphNoise(w));
 
-  const layerNums = new Set(numbersOf(layerText));
-  const readNums = new Set(numbersOf(readText));
+  const ambiguousPairs: [string, string][] = [];
+  for (const w of [...wrongWords]) {
+    const mate = missingWords.find((m) => oneSubstitution(w, m));
+    if (mate) {
+      ambiguousPairs.push([w, mate]);
+      wrongWords = wrongWords.filter((x) => x !== w);
+      missingWords = missingWords.filter((x) => x !== mate);
+    }
+  }
+
+  const layerDigits = digitStream(layerText);
+  const readDigits = digitStream(readText);
   const numberMismatches = [
-    ...[...readNums].filter((n) => !layerNums.has(n)).map((n) => `${n} (có trong bản đọc, không có trong đề gốc)`),
-    ...[...layerNums].filter((n) => !readNums.has(n)).map((n) => `${n} (có trong đề gốc, thiếu trong bản đọc)`),
+    ...[...new Set(numberTokens(readText))].filter((n) => !layerDigits.includes(n)).map((n) => `${n} (có trong bản đọc, không có trong đề gốc)`),
+    ...[...new Set(numberTokens(layerText))].filter((n) => !readDigits.includes(n)).map((n) => `${n} (có trong đề gốc, thiếu trong bản đọc)`),
   ];
-  return { wrongWords, missingWords, numberMismatches, score: wrongWords.length + missingWords.length + numberMismatches.length };
+  return {
+    wrongWords,
+    missingWords,
+    ambiguousPairs,
+    numberMismatches,
+    score: wrongWords.length + missingWords.length + numberMismatches.length + 0.5 * ambiguousPairs.length,
+  };
 }
 
-export function describeLayerCheck(c: LayerCheck): string[] {
+/** includeAmbiguous=true khi hai lần đọc bất đồng (cặp mơ hồ lúc đó đáng để giáo viên xem). */
+export function describeLayerCheck(c: LayerCheck, includeAmbiguous = false): string[] {
   const out: string[] = [];
   if (c.wrongWords.length) out.push(`Từ không khớp lớp chữ gốc của PDF: ${c.wrongWords.slice(0, 5).join(", ")}`);
   if (c.missingWords.length) out.push(`Từ có trong đề gốc nhưng thiếu trong bản số hóa: ${c.missingWords.slice(0, 5).join(", ")}`);
+  if (includeAmbiguous && c.ambiguousPairs.length) {
+    out.push(`Từ khác đề gốc 1 ký tự (kiểm tra dấu/chữ): ${c.ambiguousPairs.slice(0, 4).map(([r, l]) => `"${r}" so với gốc "${l}"`).join("; ")}`);
+  }
   if (c.numberMismatches.length) out.push(`Số lệch so với đề gốc: ${c.numberMismatches.slice(0, 4).join("; ")}`);
   return out;
 }

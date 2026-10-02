@@ -25,16 +25,28 @@ t("dropped read scores worse than faithful one (arbiter picks faithful)", d.scor
 // Dấu tiếng Việt sai: vecto vs vectơ
 const layer4 = "Câu 4. Phương trình đường thẳng đi qua điểm và có một vectơ chỉ phương là";
 const vecto = mk("Phương trình đường thẳng đi qua điểm và có một vecto chỉ phương là");
-t("wrong diacritic 'vecto' detected as wrong word", checkAgainstLayer(vecto, layer4).wrongWords.includes("vecto"));
+t("diacritic variant 'vecto' vs layer 'vectơ' -> ambiguous pair, scores worse than the faithful read",
+  checkAgainstLayer(vecto, layer4).ambiguousPairs.length === 1 &&
+  checkAgainstLayer(vecto, layer4).score > checkAgainstLayer(mk("Phương trình đường thẳng đi qua điểm và có một vectơ chỉ phương là"), layer4).score);
+t("ambiguous pair only reported when reads disagree", describeLayerCheck(checkAgainstLayer(vecto, layer4)).length === 0 && describeLayerCheck(checkAgainstLayer(vecto, layer4), true).length === 1);
 t("correct 'vectơ' passes", checkAgainstLayer(mk("Phương trình đường thẳng đi qua điểm và có một vectơ chỉ phương là"), layer4).score === 0);
 
 // Chữ số sai: 7500000 vs 700000
-const layer16 = "Các thiên thạch có đường kính lớn hơn 140m và có khoảng cách nhỏ hơn 7 500 000 km được coi là những vật thể nguy hiểm";
+// Lớp chữ thật của đề mẫu: dòng bị ngắt giữa "7" và "500000" (hai khoảng trắng sau khi nối dòng)
+const layer16 = "Các thiên thạch có đường kính lớn hơn 140m và có khoảng cách nhỏ hơn 7  500000 km được coi là những vật thể nguy hiểm";
 const right = mk("Các thiên thạch có đường kính lớn hơn $140m$ và có khoảng cách nhỏ hơn $7500000$ km được coi là những vật thể nguy hiểm");
 const wrong = mk("Các thiên thạch có đường kính lớn hơn $140m$ và có khoảng cách nhỏ hơn $700000$ km được coi là những vật thể nguy hiểm");
-t("number with spaces in layer ('7 500 000') matches 7500000", checkAgainstLayer(right, layer16).numberMismatches.length === 0, JSON.stringify(checkAgainstLayer(right, layer16)));
-t("wrong digit count 700000 flagged both ways", checkAgainstLayer(wrong, layer16).numberMismatches.length === 2, JSON.stringify(checkAgainstLayer(wrong, layer16).numberMismatches));
+t("line-wrapped layer number ('7  500000') matches read 7500000", checkAgainstLayer(right, layer16).numberMismatches.length === 0, JSON.stringify(checkAgainstLayer(right, layer16)));
+const thin = mk("Các thiên thạch có đường kính lớn hơn $140m$ và có khoảng cách nhỏ hơn $7\,500\,000$ km được coi là những vật thể nguy hiểm");
+t("read written 7\,500\,000 also matches", checkAgainstLayer(thin, layer16).numberMismatches.length === 0, JSON.stringify(checkAgainstLayer(thin, layer16).numberMismatches));
+t("wrong digit count 700000 still flagged", checkAgainstLayer(wrong, layer16).numberMismatches.length >= 1, JSON.stringify(checkAgainstLayer(wrong, layer16).numberMismatches));
 t("describeLayerCheck produces readable lines", describeLayerCheck(checkAgainstLayer(wrong, layer16)).some((l) => l.includes("Số lệch")));
+
+// Ký tự rác mũi tên véc-tơ trong lớp chữ không gây cờ giả
+t("vector-arrow glyph noise (uuur) ignored", checkAgainstLayer(mk("Cho hai véc-tơ $\overrightarrow{AB}$ và $\overrightarrow{AC}$"), "Câu 7. Cho hai véc-tơ uuur AB và uuur AC").missingWords.includes("uuur") === false);
+// Lỗi của chính lớp chữ ("iượt" thay "lượt") khi hai lần đọc đồng ý -> không báo
+const gl = checkAgainstLayer(mk("Số lượt chơi là một"), "Số iượt chơi là một");
+t("layer's own glitch (iượt) lands in ambiguous pairs, not wrong/missing", gl.ambiguousPairs.length === 1 && gl.wrongWords.length === 0 && gl.missingWords.length === 0, JSON.stringify(gl));
 
 // Công thức vỡ trong lớp chữ KHÔNG gây cờ giả
 const layerF = "Câu 2. Cho hàm số liên tục, nhận giá trị dương trên đoạn . Xét hình phẳng giới hạn bởi đồ thị hàm số";
