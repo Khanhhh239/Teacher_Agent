@@ -289,6 +289,7 @@ async function callGeminiRaw(model: string, parts: unknown[], warnings?: string[
   const slotId = await acquireGeminiSlot(warnings);
   try {
     let lastError: Error | null = null;
+    let quotaWaitedMs = 0;
     const maxAttempts = RETRY_BACKOFF_MS.length + 1;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
@@ -305,7 +306,17 @@ async function callGeminiRaw(model: string, parts: unknown[], warnings?: string[
           }
         );
         const data = (await res.json()) as any; // eslint-disable-line @typescript-eslint/no-explicit-any
-        if (!res.ok) throw new Error(`Gemini lỗi ${res.status}: ${JSON.stringify(data).slice(0, 300)}`);
+        if (!res.ok) {
+          const err = new Error(`Gemini lỗi ${res.status}: ${JSON.stringify(data).slice(0, 300)}`) as Error & { retryAfterMs?: number };
+          // Lỗi 429 của Gemini kèm RetryInfo.retryDelay (vd "23s") = thời gian Google yêu cầu
+          // chờ để hạn mức theo phút được làm mới — chờ đúng khoảng đó hiệu quả hơn hẳn chờ
+          // cứng 2s/5s/10s (quá ngắn, thử lại vẫn 429 rồi bỏ cuộc).
+          const details: Array<Record<string, unknown>> = data?.error?.details ?? [];
+          const retryInfo = details.find((d) => String(d["@type"] ?? "").includes("RetryInfo"));
+          const secs = parseFloat(String(retryInfo?.retryDelay ?? ""));
+          if (res.status === 429 && Number.isFinite(secs)) err.retryAfterMs = Math.ceil(secs * 1000);
+          throw err;
+        }
         const finishReason = data?.candidates?.[0]?.finishReason;
         if (finishReason === "RECITATION") {
           // Thông báo gốc của Gemini dài và lẫn JSON thô, không thân thiện — giữ nguyên từ
@@ -323,7 +334,18 @@ async function callGeminiRaw(model: string, parts: unknown[], warnings?: string[
         if (!transient || attempt === maxAttempts - 1) throw lastError;
         const retryWarning = "Gemini phản hồi chậm/quá tải tạm thời, hệ thống đã tự thử lại.";
         if (warnings && !warnings.includes(retryWarning)) warnings.push(retryWarning);
-        await sleep(RETRY_BACKOFF_MS[attempt]);
+        const retryAfterMs = (lastError as Error & { retryAfterMs?: number }).retryAfterMs;
+        // Chờ đúng thời gian Google yêu cầu (+1s đệm), tối đa 45s/lần và tổng cộng không quá
+        // ~100s mỗi lệnh gọi để còn nằm trong maxDuration của route; nếu quá ngân sách thì bỏ
+        // cuộc luôn thay vì ngủ vô ích.
+        if (retryAfterMs !== undefined) {
+          const wait = Math.min(retryAfterMs + 1000, 45_000);
+          if (quotaWaitedMs + wait > 100_000) throw lastError;
+          quotaWaitedMs += wait;
+          await sleep(wait);
+        } else {
+          await sleep(RETRY_BACKOFF_MS[attempt]);
+        }
       }
     }
     throw lastError ?? new Error("Gemini: lỗi không xác định");
