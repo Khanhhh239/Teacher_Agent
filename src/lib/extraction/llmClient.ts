@@ -314,8 +314,16 @@ const WMF_OCR_CONCURRENCY = 5;
 const WMF_OCR_MAX_COUNT = 60;
 
 export async function ocrWmfEquations(equations: Map<number, Buffer>): Promise<Map<number, string>> {
-  const { convertMetafileToDataUrl } = await import("emf-converter");
   const results = new Map<number, string>();
+  let convertMetafileToDataUrl: (buf: ArrayBuffer) => Promise<string | null>;
+  try {
+    // import động để cô lập lỗi nếu môi trường serverless không load được binary native
+    // của @napi-rs/canvas (Vercel Linux khác Windows local) — nếu lỗi, trả về rỗng và để
+    // toàn bộ rơi về marker [CT?N] như cũ thay vì làm hỏng cả lần upload.
+    ({ convertMetafileToDataUrl } = await import("emf-converter"));
+  } catch {
+    return results;
+  }
   const entries = [...equations].slice(0, WMF_OCR_MAX_COUNT);
 
   async function ocrOne(num: number, wmfBuf: Buffer): Promise<void> {
