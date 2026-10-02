@@ -99,6 +99,32 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "File đáp án chỉ hỗ trợ .docx, .pdf hoặc ảnh (.jpg/.png)" }, { status: 400 });
   }
 
+  // Docx dùng công thức MathType/Equation cũ (ảnh WMF nhúng, không phải XML toán học) không
+  // đọc được chính xác và trước đây phải fallback qua CloudConvert (dịch vụ trả phí, có lúc
+  // hết credit — xem lịch sử) để convert sang PDF rồi mới đọc được. Thay vì fallback tốn
+  // kém/chậm/phụ thuộc bên thứ 3, từ chối thẳng ngay lúc upload và yêu cầu giáo viên tự
+  // convert sang PDF trong Word (Word render công thức chính xác hơn bất kỳ cách nào khác) —
+  // docx hiện đại (công thức Word gốc hoặc không có công thức) vẫn được xử lý bình thường,
+  // nhanh và chính xác 100% vì không cần qua Gemini vision.
+  const MATHTYPE_REJECT_MESSAGE = (which: string) =>
+    `${which} dùng công thức MathType/Equation cũ (ảnh WMF) mà hệ thống không đọc chính xác được. Vui lòng mở file trong Microsoft Word, chọn "Save As" (Lưu dưới dạng khác) → chọn định dạng PDF, rồi tải file PDF đó lên thay cho file .docx.`;
+  const [fileBranchPre, answerBranchPre] = await Promise.all([
+    ext === "docx" ? detectDocxBranch(buffer) : null,
+    answerExt === "docx" ? detectDocxBranch(answerBuffer) : null,
+  ]);
+  if (fileBranchPre === "LEGACY_OLE_IMAGE" && answerBranchPre === "LEGACY_OLE_IMAGE") {
+    await cleanupTmp();
+    return NextResponse.json({ error: MATHTYPE_REJECT_MESSAGE("File đề thi và file đáp án đều") }, { status: 400 });
+  }
+  if (fileBranchPre === "LEGACY_OLE_IMAGE") {
+    await cleanupTmp();
+    return NextResponse.json({ error: MATHTYPE_REJECT_MESSAGE("File đề thi") }, { status: 400 });
+  }
+  if (answerBranchPre === "LEGACY_OLE_IMAGE") {
+    await cleanupTmp();
+    return NextResponse.json({ error: MATHTYPE_REJECT_MESSAGE("File đáp án") }, { status: 400 });
+  }
+
   /**
    * Xử lý file đề và file đáp án ĐỘC LẬP, chạy SONG SONG bằng Promise.all thay vì tuần tự
    * — trước đây xử lý nối tiếp 2 file (đề xong mới tới đáp án) có lúc cộng dồn tới >190s cho
@@ -115,43 +141,24 @@ export async function POST(request: Request) {
     previewPdfBuffer: Buffer | null;
   }> {
     let extracted: ReturnType<typeof normalizeExtractedExam>;
-    let sourceBranch: string;
     let localImages: Map<string, Buffer> | null = null;
     let previewPdfBuffer: Buffer | null = null;
 
     try {
       if (ext === "docx") {
-        sourceBranch = await detectDocxBranch(buffer);
-        if (sourceBranch === "LEGACY_OLE_IMAGE") {
-          try {
-            const pdfBuffer = await convertToPdf(buffer, fileName);
-            previewPdfBuffer = pdfBuffer;
-            const { extracted: pdfExtracted, images } = await extractPdfPages(pdfBuffer, warnings);
-            localImages = images;
-            extracted = normalizeExtractedExam({ ...pdfExtracted, source_branch: "PDF_IMAGE_ONLY" });
-            sourceBranch = "PDF_IMAGE_ONLY";
-          } catch (e) {
-            const message = e instanceof Error ? e.message : String(e);
-            warnings.push(`Không convert được sang PDF để đọc công thức MathType cũ (${message}) — dùng lại cách cũ, các công thức sẽ đánh dấu [CT?N] cần giáo viên tự nhập.`);
-            const result = await extractDocx(buffer);
-            localImages = result.images;
-            warnings.push(...result.warnings);
-            const structured = await structureExamText(result.text, warnings);
-            extracted = normalizeExtractedExam({ ...structured, source_branch: sourceBranch });
-          }
-        } else {
-          const result = await extractDocx(buffer);
-          localImages = result.images;
-          warnings.push(...result.warnings);
-          const structured = await structureExamText(result.text, warnings);
-          extracted = normalizeExtractedExam({ ...structured, source_branch: sourceBranch });
-        }
-        if (!previewPdfBuffer) {
-          try {
-            previewPdfBuffer = await convertToPdf(buffer, fileName);
-          } catch {
-            // không có bản xem trước PDF — OriginalFileViewer sẽ chỉ hiện link tải file .docx
-          }
+        // fileBranchPre chỉ có thể là OMML_NATIVE/NO_MATH_DETECTED ở đây — LEGACY_OLE_IMAGE
+        // đã bị từ chối sớm ở trên trước khi vào hàm này.
+        const result = await extractDocx(buffer);
+        localImages = result.images;
+        warnings.push(...result.warnings);
+        const structured = await structureExamText(result.text, warnings);
+        extracted = normalizeExtractedExam({ ...structured, source_branch: fileBranchPre ?? "NO_MATH_DETECTED" });
+        // Convert thêm 1 lần CHỈ để làm file xem trước đối chiếu bên phải màn hình duyệt đề
+        // (không ảnh hưởng độ chính xác trích xuất) — không chặn cả lần upload nếu lỗi.
+        try {
+          previewPdfBuffer = await convertToPdf(buffer, fileName);
+        } catch {
+          // không có bản xem trước PDF — OriginalFileViewer sẽ chỉ hiện link tải file .docx
         }
       } else if (ext === "pdf") {
         const { extracted: pdfExtracted, images } = await extractPdfPages(buffer, warnings);
@@ -174,21 +181,10 @@ export async function POST(request: Request) {
     try {
       let answerKey;
       if (answerExt === "docx") {
-        const answerBranch = await detectDocxBranch(answerBuffer);
-        if (answerBranch === "LEGACY_OLE_IMAGE") {
-          try {
-            const pdfBuffer = await convertToPdf(answerBuffer, answerFileName);
-            answerKey = await extractAnswerKeyFromPdf(pdfBuffer, warnings);
-          } catch (e) {
-            const message = e instanceof Error ? e.message : String(e);
-            warnings.push(`Không convert được file đáp án sang PDF (${message}) — thử đọc trực tiếp, có thể thiếu công thức.`);
-            const result = await extractDocx(answerBuffer);
-            answerKey = await extractAnswerKeyFromText(result.text, warnings);
-          }
-        } else {
-          const result = await extractDocx(answerBuffer);
-          answerKey = await extractAnswerKeyFromText(result.text, warnings);
-        }
+        // answerBranchPre chỉ có thể là OMML_NATIVE/NO_MATH_DETECTED ở đây — LEGACY_OLE_IMAGE
+        // đã bị từ chối sớm ở trên trước khi vào hàm này.
+        const result = await extractDocx(answerBuffer);
+        answerKey = await extractAnswerKeyFromText(result.text, warnings);
       } else if (answerExt === "pdf") {
         answerKey = await extractAnswerKeyFromPdf(answerBuffer, warnings);
       } else {

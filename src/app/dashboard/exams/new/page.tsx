@@ -196,7 +196,8 @@ export default function NewExamPage() {
         </div>
         <p className="text-xs text-slate-500">
           Cần upload cả 2 file — hệ thống sẽ tự đọc đáp án và điền sẵn vào từng câu (đánh dấu màu đỏ), bạn chỉ cần kiểm
-          tra lại và sửa nếu AI đọc sai.
+          tra lại và sửa nếu AI đọc sai. Nếu file .docx dùng công thức MathType/Equation cũ (phổ biến ở file soạn từ
+          lâu), hệ thống sẽ từ chối và yêu cầu bạn Save As sang PDF trong Word trước khi upload lại.
         </p>
 
         <div className="grid grid-cols-2 gap-3">
