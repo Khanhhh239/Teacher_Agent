@@ -85,6 +85,9 @@ export async function POST(request: Request) {
   let sourceBranch: string;
   let localImages: Map<string, Buffer> | null = null;
   const warnings: string[] = [];
+  // Giữ lại bản PDF đã convert (nếu có) để dùng làm file xem trước đối chiếu bên phải màn
+  // hình duyệt đề — xem khối "Lưu lại file đề gốc" bên dưới và OriginalFileViewer.tsx.
+  let previewPdfBuffer: Buffer | null = null;
 
   try {
     if (ext === "docx") {
@@ -96,7 +99,8 @@ export async function POST(request: Request) {
         // render công thức đúng như Word hiển thị), rồi đi qua pipeline PDF đã kiểm chứng.
         try {
           const pdfBuffer = await convertToPdf(buffer, fileName);
-          const { extracted: pdfExtracted, images } = await extractPdfPages(pdfBuffer);
+          previewPdfBuffer = pdfBuffer;
+          const { extracted: pdfExtracted, images } = await extractPdfPages(pdfBuffer, warnings);
           localImages = images;
           extracted = normalizeExtractedExam({ ...pdfExtracted, source_branch: "PDF_IMAGE_ONLY" });
           sourceBranch = "PDF_IMAGE_ONLY";
@@ -106,24 +110,34 @@ export async function POST(request: Request) {
           const result = await extractDocx(buffer);
           localImages = result.images;
           warnings.push(...result.warnings);
-          const structured = await structureExamText(result.text);
+          const structured = await structureExamText(result.text, warnings);
           extracted = normalizeExtractedExam({ ...structured, source_branch: sourceBranch });
         }
       } else {
         const result = await extractDocx(buffer);
         localImages = result.images;
         warnings.push(...result.warnings);
-        const structured = await structureExamText(result.text);
+        const structured = await structureExamText(result.text, warnings);
         extracted = normalizeExtractedExam({ ...structured, source_branch: sourceBranch });
+      }
+      if (!previewPdfBuffer) {
+        // Chưa có bản PDF nào (nhánh OMML_NATIVE/NO_MATH_DETECTED không cần convert để đọc
+        // nội dung) — convert thêm 1 lần CHỈ để làm file xem trước đối chiếu, không chặn cả
+        // lần upload nếu lỗi (giáo viên vẫn tải file .docx gốc về xem được như trước).
+        try {
+          previewPdfBuffer = await convertToPdf(buffer, fileName);
+        } catch {
+          // không có bản xem trước PDF — OriginalFileViewer sẽ chỉ hiện link tải file .docx
+        }
       }
     } else if (ext === "pdf") {
       sourceBranch = "PDF_IMAGE_ONLY";
-      const { extracted: pdfExtracted, images } = await extractPdfPages(buffer);
+      const { extracted: pdfExtracted, images } = await extractPdfPages(buffer, warnings);
       localImages = images;
       extracted = normalizeExtractedExam({ ...pdfExtracted, source_branch: sourceBranch });
     } else if (IMAGE_EXTS.has(ext)) {
       sourceBranch = "PDF_IMAGE_ONLY";
-      const { extracted: imgExtracted, images } = await extractExamFromImage(buffer);
+      const { extracted: imgExtracted, images } = await extractExamFromImage(buffer, warnings);
       localImages = images;
       extracted = normalizeExtractedExam({ ...imgExtracted, source_branch: sourceBranch });
     } else {
@@ -143,21 +157,21 @@ export async function POST(request: Request) {
       if (answerBranch === "LEGACY_OLE_IMAGE") {
         try {
           const pdfBuffer = await convertToPdf(answerBuffer, answerFileName);
-          answerKey = await extractAnswerKeyFromPdf(pdfBuffer);
+          answerKey = await extractAnswerKeyFromPdf(pdfBuffer, warnings);
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
           warnings.push(`Không convert được file đáp án sang PDF (${message}) — thử đọc trực tiếp, có thể thiếu công thức.`);
           const result = await extractDocx(answerBuffer);
-          answerKey = await extractAnswerKeyFromText(result.text);
+          answerKey = await extractAnswerKeyFromText(result.text, warnings);
         }
       } else {
         const result = await extractDocx(answerBuffer);
-        answerKey = await extractAnswerKeyFromText(result.text);
+        answerKey = await extractAnswerKeyFromText(result.text, warnings);
       }
     } else if (answerExt === "pdf") {
-      answerKey = await extractAnswerKeyFromPdf(answerBuffer);
+      answerKey = await extractAnswerKeyFromPdf(answerBuffer, warnings);
     } else if (IMAGE_EXTS.has(answerExt)) {
-      answerKey = await extractAnswerKeyFromImage(answerBuffer.toString("base64"), `image/${answerExt === "jpg" ? "jpeg" : answerExt}`);
+      answerKey = await extractAnswerKeyFromImage(answerBuffer.toString("base64"), `image/${answerExt === "jpg" ? "jpeg" : answerExt}`, warnings);
     } else {
       await cleanupTmp();
       return NextResponse.json({ error: "File đáp án chỉ hỗ trợ .docx, .pdf hoặc ảnh (.jpg/.png)" }, { status: 400 });
@@ -203,12 +217,27 @@ export async function POST(request: Request) {
     const { error: originalUploadError } = await supabase.storage
       .from("exam-images")
       .upload(originalPath, buffer, { contentType });
+    const examUpdate: Record<string, string> = {};
     if (!originalUploadError) {
       const { data: pub } = supabase.storage.from("exam-images").getPublicUrl(originalPath);
-      await supabase.from("exams").update({ original_file_url: pub.publicUrl, original_file_ext: ext }).eq("id", exam.id);
+      examUpdate.original_file_url = pub.publicUrl;
+      examUpdate.original_file_ext = ext;
+    }
+    if (previewPdfBuffer) {
+      const previewPath = `${exam.id}/original_preview.pdf`;
+      const { error: previewUploadError } = await supabase.storage
+        .from("exam-images")
+        .upload(previewPath, previewPdfBuffer, { contentType: "application/pdf" });
+      if (!previewUploadError) {
+        const { data: previewPub } = supabase.storage.from("exam-images").getPublicUrl(previewPath);
+        examUpdate.original_preview_url = previewPub.publicUrl;
+      }
+    }
+    if (Object.keys(examUpdate).length > 0) {
+      await supabase.from("exams").update(examUpdate).eq("id", exam.id);
     }
   } catch {
-    // không chặn upload chính nếu lưu file gốc thất bại
+    // không chặn upload chính nếu lưu file gốc/bản xem trước thất bại
   }
 
   for (let i = 0; i < extracted.questions.length; i++) {

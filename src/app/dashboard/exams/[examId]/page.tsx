@@ -63,6 +63,7 @@ export default async function ExamReviewPage({
             <OriginalFileViewer
               url={(exam as Exam).original_file_url}
               ext={(exam as Exam).original_file_ext}
+              previewUrl={(exam as Exam).original_preview_url}
             />
           </div>
         }

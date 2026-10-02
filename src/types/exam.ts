@@ -50,6 +50,7 @@ export interface Exam {
   settings: ExamSettings;
   original_file_url: string | null;
   original_file_ext: string | null;
+  original_preview_url: string | null;
   created_at: string;
   updated_at: string;
 }
