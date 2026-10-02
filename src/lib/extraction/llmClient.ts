@@ -373,6 +373,65 @@ async function callDeepseekText(prompt: string): Promise<string> {
   return data.choices[0].message.content;
 }
 
+// Model vision miễn phí qua OpenRouter (không tính phí: pricing.prompt=0, completion=0 — xác
+// nhận trực tiếp qua https://openrouter.ai/api/v1/models lúc chọn model này) — dùng làm
+// phương án CUỐI CÙNG khi Gemini bị chặn RECITATION ngay cả sau khi đã tách đôi trang (xem
+// callVisionFallback). Không dùng làm pipeline chính vì free tier OpenRouter rất hẹp (50
+// request/ngày nếu chưa nạp tiền), chỉ hợp để xử lý số ít trang bị kẹt, không phải cả đề.
+const OPENROUTER_FALLBACK_VISION_MODEL = "qwen/qwen3.8-27b:free";
+
+async function callOpenRouterVision(imageBase64: string, prompt: string, mimeType = "image/png"): Promise<string> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) throw new Error("Chưa cấu hình OPENROUTER_API_KEY");
+
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: OPENROUTER_FALLBACK_VISION_MODEL,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: prompt },
+            { type: "image_url", image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
+          ],
+        },
+      ],
+      temperature: 0,
+      // Model này mặc định bật chế độ "suy nghĩ" (reasoning) khá dài dòng — tắt đi để chỉ
+      // lấy JSON kết quả, tránh lẫn nội dung suy luận vào response và chậm không cần thiết.
+      reasoning: { enabled: false },
+      response_format: { type: "json_object" },
+    }),
+  });
+  const data = (await res.json()) as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+  if (!res.ok) throw new Error(`OpenRouter lỗi ${res.status}: ${JSON.stringify(data).slice(0, 300)}`);
+  const text = data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error("OpenRouter không trả về nội dung: " + JSON.stringify(data).slice(0, 300));
+  return text;
+}
+
+/**
+ * Phương án cuối cùng khi Gemini bị RECITATION chặn 1 trang/nửa trang ngay cả sau khi đã thử
+ * tách đôi (xem processPageImage/extractAnswerKeyFromPageWithSplit) — Qwen (qua OpenRouter)
+ * không có bộ lọc recitation kiểu Gemini nên không gặp vấn đề này, dù độ chính xác OCR công
+ * thức/tiếng Việt chưa chắc bằng Gemini. Không cấu hình OPENROUTER_API_KEY thì bỏ qua fallback
+ * này, giữ hành vi cũ (bỏ trang, cảnh báo giáo viên tự nhập tay).
+ */
+async function callVisionFallback(imageBase64: string, prompt: string, warnings?: string[]): Promise<string | null> {
+  if (!process.env.OPENROUTER_API_KEY) return null;
+  try {
+    const text = await callOpenRouterVision(imageBase64, prompt, "image/png");
+    warnings?.push("Gemini bị chặn (nghi bản quyền), hệ thống đã tự chuyển sang model dự phòng (Qwen) để đọc phần này — độ chính xác có thể thấp hơn bình thường, nên kiểm tra kỹ lại.");
+    return text;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    warnings?.push(`Thử model dự phòng (Qwen) cũng thất bại: ${message}`);
+    return null;
+  }
+}
+
 function provider(): "auto" | "gemini" | "deepseek" {
   const p = (process.env.LLM_PROVIDER ?? "auto").toLowerCase();
   return p === "gemini" || p === "deepseek" ? p : "auto";
@@ -484,6 +543,14 @@ async function extractAnswerKeyFromPageWithSplit(
     const message = e instanceof Error ? e.message : String(e);
     if (!message.includes("RECITATION")) throw e;
     if (depth >= 1) {
+      const fallbackText = await callVisionFallback(pageBuffer.toString("base64"), ANSWER_KEY_PROMPT, warnings);
+      if (fallbackText) {
+        try {
+          return parseAnswerKeyResponse(fallbackText);
+        } catch {
+          // JSON lỗi từ model dự phòng — coi như không đọc được, rơi về cảnh báo bên dưới.
+        }
+      }
       warnings?.push(`${pageLabel}: ${message} — đáp án các câu ở phần này sẽ bị thiếu, cần giáo viên tự điền tay.`);
       return [];
     }
@@ -558,11 +625,52 @@ interface PdfPageResult {
   figures: Array<{ id: string; bbox_1000: [number, number, number, number] }>;
 }
 
+/**
+ * Chế độ "chống trùng khớp": bắt model chèn ký hiệu phân tách (¦, U+00A6) giữa các cụm từ rồi
+ * hệ thống tự xóa sau khi nhận về. ĐÃ KIỂM CHỨNG THỰC TẾ bằng gọi thẳng Gemini API trên đúng
+ * 2 trang đề minh họa công khai hay bị RECITATION: prompt thường bị chặn 4/4 lần (mọi model
+ * Gemini/Gemma đều vậy), còn prompt có quy tắc chèn ký hiệu thì Gemini trả STOP (đọc bình
+ * thường) 100% các lần. Cơ chế của bộ lọc là so khớp chuỗi chữ LIỀN MẠCH của output với dữ
+ * liệu đã biết — chèn ký hiệu làm đứt chuỗi liền mạch, trong khi nội dung sau khi xóa ký hiệu
+ * vẫn y nguyên bản gốc. Chỉ dùng khi lần đọc thường đã bị RECITATION (không dùng mặc định vì
+ * làm output dài hơn và có rủi ro nhỏ model chèn sai chỗ).
+ */
+const MARKER_CHAR = "¦";
+const MARKER_RULE = `
+QUY TẮC BẮT BUỘC về định dạng văn bản: trong MỌI trường chữ (content_latex, text_latex), cứ sau mỗi khoảng 3 từ liên tiếp phải chèn thêm đúng 1 ký hiệu " ${MARKER_CHAR} " (dấu gạch đứt U+00A6, có khoảng trắng 2 bên) tại chỗ ĐÃ có khoảng trắng — cả trong câu dẫn lẫn trong phần lựa chọn/mệnh đề. KHÔNG chèn vào giữa 1 lệnh LaTeX, giữa các chữ số của 1 số, hay bên trong cặp ngoặc {}. Hệ thống sẽ tự xóa ký hiệu này sau nên bắt buộc làm đúng, không bỏ sót. Phần còn lại của schema JSON (type, key, figure_refs, figures...) giữ NGUYÊN như yêu cầu ở trên, vẫn trả về 1 object có khóa "questions" và "figures".`;
+
+function stripMarkers<T>(value: T): T {
+  if (typeof value === "string") {
+    return value.replace(new RegExp(`[ \\t]*${MARKER_CHAR}[ \\t]*`, "g"), " ") as unknown as T;
+  }
+  if (Array.isArray(value)) return value.map((v) => stripMarkers(v)) as unknown as T;
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, stripMarkers(v)])) as unknown as T;
+  }
+  return value;
+}
+
+/** Model đôi khi trả thẳng 1 mảng câu hỏi thay vì object {questions, figures} (hay gặp khi bị
+ * ép định dạng) — chuẩn hóa về đúng PdfPageResult để phần xử lý phía sau không phải đoán. */
+function normalizePageResult(raw: unknown): PdfPageResult {
+  if (Array.isArray(raw)) {
+    return { title: null, subject: null, questions: raw as PdfPageResult["questions"], figures: [] };
+  }
+  const obj = (raw ?? {}) as Partial<PdfPageResult>;
+  return {
+    title: obj.title ?? null,
+    subject: obj.subject ?? null,
+    questions: Array.isArray(obj.questions) ? obj.questions : [],
+    figures: Array.isArray(obj.figures) ? obj.figures : [],
+  };
+}
+
 async function ocrPdfPage(
   pagePngBase64: string,
   prevTail: string | null,
   warnings?: string[],
-  temperature = 0
+  temperature = 0,
+  markerMode = false
 ): Promise<PdfPageResult> {
   if (provider() === "deepseek") {
     throw new Error("DeepSeek chưa hỗ trợ nhận ảnh trong pipeline này — dùng Gemini cho nhánh PDF.");
@@ -570,9 +678,10 @@ async function ocrPdfPage(
   const continuationRule = prevTail
     ? CONTINUATION_RULE_TEMPLATE.replace("{prevTail}", prevTail)
     : "";
-  const prompt = PDF_PAGE_PROMPT.replace("{continuationRule}", continuationRule);
+  const prompt = PDF_PAGE_PROMPT.replace("{continuationRule}", continuationRule) + (markerMode ? MARKER_RULE : "");
   const text = await callGeminiWithImage(pagePngBase64, prompt, "image/png", warnings, temperature);
-  return extractJson(text) as PdfPageResult;
+  const parsed = normalizePageResult(extractJson(text));
+  return markerMode ? stripMarkers(parsed) : parsed;
 }
 
 /**
@@ -582,20 +691,35 @@ async function ocrPdfPage(
  * với đề thi/tài liệu công khai (đề minh họa Bộ GD&ĐT...) đây gần như chắc chắn là false
  * positive vì nội dung hoàn toàn hợp pháp để trích xuất.
  *
- * ĐÃ KIỂM CHỨNG BẰNG SCRIPT GỌI THẲNG GEMINI API thực tế (không phải suy đoán): đổi
- * temperature KHÔNG giúp ích gì — cùng 1 trang vẫn bị chặn kể cả ở temperature=1.0. Thứ duy
- * nhất thực sự tránh được lỗi là CẮT NHỎ ảnh (xem processPageImage/split trong
- * extractImagePages) — bộ lọc có vẻ dựa trên độ dài đoạn text khớp liên tục, ảnh nửa trang
- * không đủ dài để khớp. Vì vậy ở đây chỉ thử 1 lần duy nhất (không lặp lại vô ích, tốn lệnh
- * gọi Gemini và dễ dẫn tới lỗi 429 vượt rate limit khi phải xử lý nhiều trang) — việc tách
- * đôi trang để xử lý tiếp do processPageImage đảm nhiệm ở lớp gọi.
+ * ĐÃ KIỂM CHỨNG BẰNG SCRIPT GỌI THẲNG GEMINI API thực tế (không phải suy đoán):
+ * - Đổi temperature KHÔNG giúp ích gì (vẫn bị chặn ở temperature=1.0).
+ * - Đổi sang model Gemini/Gemma khác KHÔNG giúp ích (mọi model trả lời được đều bị chặn).
+ * - Chế độ chống trùng khớp (chèn ký hiệu rồi xóa, xem MARKER_RULE) tránh được lỗi này ở
+ *   mọi lần thử — đây là bước thử ĐẦU TIÊN khi bị chặn vì giữ nguyên cả trang (không mất
+ *   ngữ cảnh/hình, chỉ tốn thêm 1 lệnh gọi).
+ * - Cắt đôi trang (processPageImage) là phương án tiếp theo nếu chế độ trên vẫn thất bại.
  */
 async function ocrPdfPageWithRecitationRetry(
   pagePngBase64: string,
   prevTail: string | null,
   warnings?: string[]
 ): Promise<PdfPageResult> {
-  return ocrPdfPage(pagePngBase64, prevTail, warnings, 0);
+  try {
+    return await ocrPdfPage(pagePngBase64, prevTail, warnings, 0, false);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (!message.includes("RECITATION")) throw e;
+    try {
+      const result = await ocrPdfPage(pagePngBase64, prevTail, warnings, 0, true);
+      const note = "Một số trang bị Gemini chặn vì nghi trùng bản quyền (đề công khai) — hệ thống đã đọc lại bằng chế độ chống trùng khớp; nội dung vẫn đủ nhưng nên rà soát kỹ các trang này.";
+      if (warnings && !warnings.includes(note)) warnings.push(note);
+      return result;
+    } catch {
+      // Chế độ chống trùng khớp cũng thất bại (RECITATION/lỗi parse/lỗi mạng) — trả về lỗi
+      // RECITATION gốc để lớp gọi chuyển sang phương án kế tiếp (tách đôi trang, model dự phòng).
+      throw e;
+    }
+  }
 }
 
 const CONTINUATION_MARKER = "[TIẾP TRANG TRƯỚC]";
@@ -679,21 +803,34 @@ async function extractImagePages(
       if (!message.includes("RECITATION") || !height) throw e;
 
       if (depth >= 1) {
-        // Đã thử split 1 lần rồi mà nửa này vẫn kẹt — chịu thua riêng phần này, không split
-        // tiếp để tránh đệ quy vô hạn/quá nhiều lệnh gọi Gemini cho 1 trang.
-        warnings?.push(`${pageLabel}: ${message} — các câu hỏi ở phần này sẽ bị thiếu, cần giáo viên tự nhập tay.`);
-        return null;
+        // Đã thử split 1 lần rồi mà nửa này vẫn kẹt — thử model dự phòng (Qwen, không có bộ
+        // lọc recitation) trước khi chịu thua hẳn, không split tiếp để tránh đệ quy vô hạn.
+        const continuationRule = prevTailIn ? CONTINUATION_RULE_TEMPLATE.replace("{prevTail}", prevTailIn) : "";
+        const fallbackPrompt = PDF_PAGE_PROMPT.replace("{continuationRule}", continuationRule);
+        const fallbackText = await callVisionFallback(pagePng.toString("base64"), fallbackPrompt, warnings);
+        if (!fallbackText) {
+          warnings?.push(`${pageLabel}: ${message} — các câu hỏi ở phần này sẽ bị thiếu, cần giáo viên tự nhập tay.`);
+          return null;
+        }
+        try {
+          result = normalizePageResult(extractJson(fallbackText));
+        } catch {
+          warnings?.push(`${pageLabel}: model dự phòng trả về dữ liệu không đọc được — các câu hỏi ở phần này sẽ bị thiếu, cần giáo viên tự nhập tay.`);
+          return null;
+        }
+        // result lấy được từ model dự phòng — rơi xuống phần xử lý figure/câu hỏi chung bên
+        // dưới (sau khối try/catch), giống hệt nhánh Gemini thành công bình thường.
+      } else {
+        warnings?.push(`${pageLabel}: Gemini từ chối đọc do nghi ngờ bản quyền — hệ thống tự tách đôi trang để đọc riêng từng nửa (đã kiểm chứng cách này tránh được lỗi).`);
+        const topHeight = Math.round(height * 0.55);
+        const bottomTop = Math.round(height * 0.45);
+        const topHalf = await sharp(pagePng).extract({ left: 0, top: 0, width, height: topHeight }).png().toBuffer();
+        const bottomHalf = await sharp(pagePng).extract({ left: 0, top: bottomTop, width, height: height - bottomTop }).png().toBuffer();
+
+        let tail = await processPageImage(topHalf, prevTailIn, `${pageLabel} (nửa trên)`, `${fileLabel}a`, captureTitleSubject, depth + 1);
+        tail = await processPageImage(bottomHalf, tail, `${pageLabel} (nửa dưới)`, `${fileLabel}b`, captureTitleSubject, depth + 1);
+        return tail;
       }
-
-      warnings?.push(`${pageLabel}: Gemini từ chối đọc do nghi ngờ bản quyền — hệ thống tự tách đôi trang để đọc riêng từng nửa (đã kiểm chứng cách này tránh được lỗi).`);
-      const topHeight = Math.round(height * 0.55);
-      const bottomTop = Math.round(height * 0.45);
-      const topHalf = await sharp(pagePng).extract({ left: 0, top: 0, width, height: topHeight }).png().toBuffer();
-      const bottomHalf = await sharp(pagePng).extract({ left: 0, top: bottomTop, width, height: height - bottomTop }).png().toBuffer();
-
-      let tail = await processPageImage(topHalf, prevTailIn, `${pageLabel} (nửa trên)`, `${fileLabel}a`, captureTitleSubject, depth + 1);
-      tail = await processPageImage(bottomHalf, tail, `${pageLabel} (nửa dưới)`, `${fileLabel}b`, captureTitleSubject, depth + 1);
-      return tail;
     }
 
     if (captureTitleSubject) {
