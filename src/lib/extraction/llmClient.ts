@@ -282,7 +282,7 @@ async function releaseGeminiSlot(slotId: string | null): Promise<void> {
  * lần thử, không riêng từng lần, vì đây vẫn là 1 lượt gọi logic duy nhất. */
 const RETRY_BACKOFF_MS = [2000, 5000, 10000];
 
-async function callGeminiRaw(model: string, parts: unknown[], warnings?: string[]): Promise<string> {
+async function callGeminiRaw(model: string, parts: unknown[], warnings?: string[], temperature = 0): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("Chưa cấu hình GEMINI_API_KEY");
 
@@ -299,7 +299,7 @@ async function callGeminiRaw(model: string, parts: unknown[], warnings?: string[
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               contents: [{ parts }],
-              generationConfig: { temperature: 0, responseMimeType: "application/json" },
+              generationConfig: { temperature, responseMimeType: "application/json" },
             }),
             dispatcher: longTimeoutDispatcher,
           }
@@ -328,14 +328,21 @@ async function callGeminiText(prompt: string, warnings?: string[]): Promise<stri
   return callGeminiRaw(GEMINI_MODEL_TEXT, [{ text: prompt }], warnings);
 }
 
-async function callGeminiWithImage(imageBase64: string, prompt: string, mimeType = "image/png", warnings?: string[]): Promise<string> {
+async function callGeminiWithImage(
+  imageBase64: string,
+  prompt: string,
+  mimeType = "image/png",
+  warnings?: string[],
+  temperature = 0
+): Promise<string> {
   return callGeminiRaw(
     GEMINI_MODEL_VISION,
     [
       { inline_data: { mime_type: mimeType, data: imageBase64 } },
       { text: prompt },
     ],
-    warnings
+    warnings,
+    temperature
   );
 }
 
@@ -444,9 +451,25 @@ export async function extractAnswerKeyFromText(rawText: string, warnings?: strin
 }
 
 /** Đọc đáp án từ 1 ảnh (file đáp án dạng ảnh chụp, hoặc từng trang PDF đã render) — 1 lần
- * gọi Gemini vision / ảnh. */
+ * gọi Gemini vision / ảnh. Tự thử lại với temperature khác nếu gặp lỗi RECITATION (xem
+ * ocrPdfPageWithRecitationRetry — cùng hiện tượng false-positive với nội dung đề/đáp án
+ * công khai, không riêng gì nhánh câu hỏi). */
 export async function extractAnswerKeyFromImage(imageBase64: string, mimeType = "image/png", warnings?: string[]): Promise<AnswerKeyEntry[]> {
-  return parseAnswerKeyResponse(await callGeminiWithImage(imageBase64, ANSWER_KEY_PROMPT, mimeType, warnings));
+  const temperatures = [0, 0.3, 0.6];
+  let lastError: Error | null = null;
+  for (const temperature of temperatures) {
+    try {
+      return parseAnswerKeyResponse(await callGeminiWithImage(imageBase64, ANSWER_KEY_PROMPT, mimeType, warnings, temperature));
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+      if (!lastError.message.includes("RECITATION")) throw lastError;
+      if (warnings) {
+        const w = "Gemini từ chối đọc 1 trang đáp án do nghi ngờ trùng bản quyền (recitation filter), hệ thống đã tự thử lại với cách đọc khác.";
+        if (!warnings.includes(w)) warnings.push(w);
+      }
+    }
+  }
+  throw lastError ?? new Error("Gemini: lỗi RECITATION không xác định");
 }
 
 /** File đáp án dạng PDF nhiều trang — render từng trang rồi gọi Gemini vision riêng cho mỗi
@@ -504,7 +527,12 @@ interface PdfPageResult {
   figures: Array<{ id: string; bbox_1000: [number, number, number, number] }>;
 }
 
-async function ocrPdfPage(pagePngBase64: string, prevTail: string | null, warnings?: string[]): Promise<PdfPageResult> {
+async function ocrPdfPage(
+  pagePngBase64: string,
+  prevTail: string | null,
+  warnings?: string[],
+  temperature = 0
+): Promise<PdfPageResult> {
   if (provider() === "deepseek") {
     throw new Error("DeepSeek chưa hỗ trợ nhận ảnh trong pipeline này — dùng Gemini cho nhánh PDF.");
   }
@@ -512,8 +540,42 @@ async function ocrPdfPage(pagePngBase64: string, prevTail: string | null, warnin
     ? CONTINUATION_RULE_TEMPLATE.replace("{prevTail}", prevTail)
     : "";
   const prompt = PDF_PAGE_PROMPT.replace("{continuationRule}", continuationRule);
-  const text = await callGeminiWithImage(pagePngBase64, prompt, "image/png", warnings);
+  const text = await callGeminiWithImage(pagePngBase64, prompt, "image/png", warnings, temperature);
   return extractJson(text) as PdfPageResult;
+}
+
+/**
+ * Gemini đôi khi từ chối sinh nội dung (finishReason "RECITATION") khi nghi ngờ trang ảnh
+ * trùng khớp với tài liệu có bản quyền đã biết (thực tế quan sát được: xảy ra cả ở TRANG
+ * ĐẦU TIÊN, không riêng trang có ngữ cảnh nối tiếp từ trang trước như giả định ban đầu) —
+ * với đề thi/tài liệu công khai (đề minh họa Bộ GD&ĐT...) đây gần như chắc chắn là false
+ * positive vì nội dung hoàn toàn hợp pháp để trích xuất. Thử lại tối đa 2 lần với
+ * temperature tăng dần (bộ lọc recitation nhạy với output y hệt ở temperature=0) và bỏ
+ * ngữ cảnh trang trước (nếu có) ở lần thử cuối, trước khi chịu thua hẳn.
+ */
+async function ocrPdfPageWithRecitationRetry(
+  pagePngBase64: string,
+  prevTail: string | null,
+  warnings?: string[]
+): Promise<PdfPageResult> {
+  const temperatures = [0, 0.3, 0.6];
+  let lastError: Error | null = null;
+  for (let i = 0; i < temperatures.length; i++) {
+    try {
+      // Bỏ ngữ cảnh trang trước ở lần thử cuối — ngữ cảnh dài lặp lại nguyên văn có thể là
+      // nguyên nhân kích hoạt bộ lọc, dù không phải lúc nào cũng vậy.
+      const tail = i === temperatures.length - 1 ? null : prevTail;
+      return await ocrPdfPage(pagePngBase64, tail, warnings, temperatures[i]);
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+      if (!lastError.message.includes("RECITATION")) throw lastError;
+      if (warnings) {
+        const w = "Gemini từ chối đọc 1 trang do nghi ngờ trùng bản quyền (recitation filter), hệ thống đã tự thử lại với cách đọc khác.";
+        if (!warnings.includes(w)) warnings.push(w);
+      }
+    }
+  }
+  throw lastError ?? new Error("Gemini: lỗi RECITATION không xác định");
 }
 
 const CONTINUATION_MARKER = "[TIẾP TRANG TRƯỚC]";
@@ -573,21 +635,7 @@ async function extractImagePages(
     const pagePng = pagePngs[pageIndex];
     const { width, height } = await sharp(pagePng).metadata();
 
-    let result: PdfPageResult;
-    try {
-      result = await ocrPdfPage(pagePng.toString("base64"), prevTail, warnings);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (prevTail && msg.includes("RECITATION")) {
-        // Gemini đôi khi từ chối sinh nội dung (finishReason RECITATION, nghi ngờ trùng lặp
-        // bản quyền) khi prompt chứa nguyên văn trích dẫn dài từ trang trước làm ngữ cảnh —
-        // thử lại KHÔNG kèm ngữ cảnh thay vì để cả lần upload lỗi; mất lợi ích ghép câu bị
-        // cắt trang cho đúng 1 trang này, nhưng vẫn ra được kết quả thay vì lỗi 500.
-        result = await ocrPdfPage(pagePng.toString("base64"), null, warnings);
-      } else {
-        throw e;
-      }
-    }
+    const result: PdfPageResult = await ocrPdfPageWithRecitationRetry(pagePng.toString("base64"), prevTail, warnings);
     if (pageIndex === 0) {
       title = result.title ?? title;
       subject = result.subject ?? subject;
