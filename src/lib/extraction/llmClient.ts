@@ -485,21 +485,49 @@ export async function extractAnswerKeyFromImage(imageBase64: string, mimeType = 
 /** File đáp án dạng PDF nhiều trang — render từng trang rồi gọi Gemini vision riêng cho mỗi
  * trang (giống extractPdfPages nhưng không cần OCR câu hỏi/hình ảnh, chỉ cần đáp án nên
  * không dùng ngữ cảnh nối trang). Số lần gọi Gemini = số trang PDF đáp án. */
+/** Đọc 1 trang/nửa trang đáp án, tự tách đôi (đã kiểm chứng tránh được RECITATION — xem
+ * processPageImage trong extractImagePages) nếu bị từ chối, tối đa 1 lần tách. */
+async function extractAnswerKeyFromPageWithSplit(
+  pageBuffer: Buffer,
+  pageLabel: string,
+  warnings: string[] | undefined,
+  depth: number
+): Promise<AnswerKeyEntry[]> {
+  try {
+    return await extractAnswerKeyFromImage(pageBuffer.toString("base64"), "image/png", warnings);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (!message.includes("RECITATION")) throw e;
+    if (depth >= 1) {
+      warnings?.push(`${pageLabel}: ${message} — đáp án các câu ở phần này sẽ bị thiếu, cần giáo viên tự điền tay.`);
+      return [];
+    }
+    const sharp = (await import("sharp")).default;
+    const { width, height } = await sharp(pageBuffer).metadata();
+    if (!width || !height) {
+      warnings?.push(`${pageLabel}: ${message} — đáp án các câu trên trang này sẽ bị thiếu, cần giáo viên tự điền tay.`);
+      return [];
+    }
+    warnings?.push(`${pageLabel}: Gemini từ chối đọc do nghi ngờ bản quyền — hệ thống tự tách đôi trang để đọc riêng từng nửa.`);
+    const topHeight = Math.round(height * 0.55);
+    const bottomTop = Math.round(height * 0.45);
+    const topHalf = await sharp(pageBuffer).extract({ left: 0, top: 0, width, height: topHeight }).png().toBuffer();
+    const bottomHalf = await sharp(pageBuffer).extract({ left: 0, top: bottomTop, width, height: height - bottomTop }).png().toBuffer();
+    const [topEntries, bottomEntries] = await Promise.all([
+      extractAnswerKeyFromPageWithSplit(topHalf, `${pageLabel} (nửa trên)`, warnings, depth + 1),
+      extractAnswerKeyFromPageWithSplit(bottomHalf, `${pageLabel} (nửa dưới)`, warnings, depth + 1),
+    ]);
+    return [...topEntries, ...bottomEntries];
+  }
+}
+
 export async function extractAnswerKeyFromPdf(buffer: Buffer, warnings?: string[]): Promise<AnswerKeyEntry[]> {
   const { renderPdfPages } = await import("./pdfRender");
   const pages = renderPdfPages(buffer);
   const all: AnswerKeyEntry[] = [];
   for (let i = 0; i < pages.length; i++) {
-    try {
-      const entries = await extractAnswerKeyFromImage(pages[i].toString("base64"), "image/png", warnings);
-      all.push(...entries);
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      if (!message.includes("RECITATION")) throw e;
-      // Bỏ qua riêng trang đáp án này (giống extractImagePages) thay vì làm hỏng cả file đáp
-      // án — các câu còn lại từ trang khác vẫn được đọc và ghép bình thường.
-      warnings?.push(`Trang ${i + 1} (đáp án): ${message} — đáp án các câu trên trang này sẽ bị thiếu, cần giáo viên tự điền tay.`);
-    }
+    const entries = await extractAnswerKeyFromPageWithSplit(pages[i], `Trang ${i + 1} (đáp án)`, warnings, 0);
+    all.push(...entries);
   }
   return all;
 }
@@ -653,26 +681,54 @@ async function extractImagePages(
   const allQuestions: ExtractedExam["questions"] = [];
   let title: string | null = null;
   let subject: string | null = null;
-  let prevTail: string | null = null;
 
-  for (let pageIndex = 0; pageIndex < pagePngs.length; pageIndex++) {
-    const pagePng = pagePngs[pageIndex];
+  /**
+   * Xử lý 1 ảnh trang (hoặc 1 nửa trang khi fallback split) qua Gemini vision, cắt hình vẽ,
+   * ghép câu hỏi vào allQuestions, trả về prevTail mới để truyền tiếp. Khi gặp RECITATION
+   * (Gemini từ chối vì nghi trùng bản quyền) ngay cả sau khi đã thử nhiều temperature —
+   * kiểm chứng thực tế (script chẩn đoán, không phải suy đoán): cắt đôi trang theo chiều dọc
+   * (có chồng lấn 10% ở giữa để không mất câu nằm sát ranh giới) và đọc từng nửa riêng biệt
+   * LUÔN tránh được lỗi này, vì bộ lọc recitation nhạy với khối text liền mạch dài bằng cả
+   * trang — khối nhỏ hơn không đủ dài để khớp. Tái dùng nguyên cơ chế "câu bị cắt ngang
+   * trang" (prevTail/CONTINUATION_MARKER) sẵn có để ghép 2 nửa lại liền mạch, chỉ thử split
+   * tối đa 1 lần (depth) để tránh đệ quy vô hạn nếu 1 nửa vẫn tiếp tục bị chặn.
+   */
+  async function processPageImage(
+    pagePng: Buffer,
+    prevTailIn: string | null,
+    pageLabel: string,
+    fileLabel: string,
+    captureTitleSubject: boolean,
+    depth: number
+  ): Promise<string | null> {
     const { width, height } = await sharp(pagePng).metadata();
 
     let result: PdfPageResult;
     try {
-      result = await ocrPdfPageWithRecitationRetry(pagePng.toString("base64"), prevTail, warnings);
+      result = await ocrPdfPageWithRecitationRetry(pagePng.toString("base64"), prevTailIn, warnings);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      if (!message.includes("RECITATION")) throw e;
-      // Trang này kẹt bộ lọc recitation ngay cả sau khi đã thử hết cách — bỏ qua riêng trang
-      // này thay vì làm hỏng CẢ đề thi (các trang khác vẫn đọc được bình thường). Giáo viên
-      // sẽ cần tự nhập tay các câu thuộc trang này ở bước duyệt.
-      warnings?.push(`Trang ${pageIndex + 1}: ${message} — các câu hỏi trên trang này sẽ bị thiếu, cần giáo viên tự nhập tay.`);
-      prevTail = null;
-      continue;
+      if (!message.includes("RECITATION") || !height) throw e;
+
+      if (depth >= 1) {
+        // Đã thử split 1 lần rồi mà nửa này vẫn kẹt — chịu thua riêng phần này, không split
+        // tiếp để tránh đệ quy vô hạn/quá nhiều lệnh gọi Gemini cho 1 trang.
+        warnings?.push(`${pageLabel}: ${message} — các câu hỏi ở phần này sẽ bị thiếu, cần giáo viên tự nhập tay.`);
+        return null;
+      }
+
+      warnings?.push(`${pageLabel}: Gemini từ chối đọc do nghi ngờ bản quyền — hệ thống tự tách đôi trang để đọc riêng từng nửa (đã kiểm chứng cách này tránh được lỗi).`);
+      const topHeight = Math.round(height * 0.55);
+      const bottomTop = Math.round(height * 0.45);
+      const topHalf = await sharp(pagePng).extract({ left: 0, top: 0, width, height: topHeight }).png().toBuffer();
+      const bottomHalf = await sharp(pagePng).extract({ left: 0, top: bottomTop, width, height: height - bottomTop }).png().toBuffer();
+
+      let tail = await processPageImage(topHalf, prevTailIn, `${pageLabel} (nửa trên)`, `${fileLabel}a`, captureTitleSubject, depth + 1);
+      tail = await processPageImage(bottomHalf, tail, `${pageLabel} (nửa dưới)`, `${fileLabel}b`, captureTitleSubject, depth + 1);
+      return tail;
     }
-    if (pageIndex === 0) {
+
+    if (captureTitleSubject) {
       title = result.title ?? title;
       subject = result.subject ?? subject;
     }
@@ -702,7 +758,7 @@ async function extractImagePages(
       const cropHeight = Math.min(height - top, Math.round(((y1 - y0) / 1000) * height));
       if (cropWidth <= 0 || cropHeight <= 0) continue;
 
-      const filename = `page${pageIndex + 1}_${fig.id}.png`;
+      const filename = `page${fileLabel}_${fig.id}.png`;
       const cropped = await sharp(pagePng)
         .extract({ left, top, width: cropWidth, height: cropHeight })
         .png()
@@ -722,15 +778,15 @@ async function extractImagePages(
       // cảnh báo để giáo viên kiểm tra lại thay vì âm thầm hiển thị sai cho học sinh.
       if (imageUrls.length > 2 && warnings) {
         warnings.push(
-          `Trang ${pageIndex + 1}: có 1 câu hỏi được gán ${imageUrls.length} hình minh họa cùng lúc — kiểm tra lại xem có hình nào bị gán nhầm từ câu khác không.`
+          `${pageLabel}: có 1 câu hỏi được gán ${imageUrls.length} hình minh họa cùng lúc — kiểm tra lại xem có hình nào bị gán nhầm từ câu khác không.`
         );
       }
       const contentStr = String(q.content_latex ?? "");
 
       if (qi === 0 && contentStr.startsWith(CONTINUATION_MARKER) && allQuestions.length > 0) {
-        // Câu đầu trang này là phần tiếp của câu cuối trang trước — ghép lại thành 1 câu,
-        // không push thêm entry mới. Ưu tiên type/sub_statements/options của lần đọc này
-        // (sau khi đã thấy đủ nội dung) vì trang trước có thể đã đoán sai type do thiếu
+        // Câu đầu trang/nửa trang này là phần tiếp của câu cuối trước đó — ghép lại thành 1
+        // câu, không push thêm entry mới. Ưu tiên type/sub_statements/options của lần đọc
+        // này (sau khi đã thấy đủ nội dung) vì lượt trước có thể đã đoán sai type do thiếu
         // thông tin (vd đoán multiple_choice vì chưa thấy mệnh đề a/b/c/d).
         const prev = allQuestions[allQuestions.length - 1] as unknown as Record<string, unknown>;
         const mergedContent = `${String(prev.content_latex ?? "")} ${contentStr.slice(CONTINUATION_MARKER.length).trim()}`.trim();
@@ -745,9 +801,19 @@ async function extractImagePages(
       }
     }
 
-    if (pageQuestions.length > 0) {
-      prevTail = summarizeQuestionTail(pageQuestions[pageQuestions.length - 1]);
-    }
+    return pageQuestions.length > 0 ? summarizeQuestionTail(pageQuestions[pageQuestions.length - 1]) : prevTailIn;
+  }
+
+  let prevTail: string | null = null;
+  for (let pageIndex = 0; pageIndex < pagePngs.length; pageIndex++) {
+    prevTail = await processPageImage(
+      pagePngs[pageIndex],
+      prevTail,
+      `Trang ${pageIndex + 1}`,
+      String(pageIndex + 1),
+      pageIndex === 0,
+      0
+    );
   }
 
   return {
