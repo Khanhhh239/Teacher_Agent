@@ -1,6 +1,6 @@
 "use client";
 
-import { LatexText } from "@/components/Latex";
+import { QuestionAnswerSplit, type SplitQuestion } from "@/components/QuestionAnswerSplit";
 import type { Exam, Question } from "@/types/exam";
 
 export function ExamPreviewModal({
@@ -16,9 +16,19 @@ export function ExamPreviewModal({
   onClose: () => void;
   onConfirm: () => void;
 }) {
+  const splitQuestions: SplitQuestion[] = questions.map((q, idx) => ({
+    id: q.id,
+    number: idx + 1,
+    part_label: q.part_label,
+    source_crop_url: q.source_crop_url ?? null,
+    type: q.type,
+    optionKeys: q.options.map((o) => o.key),
+    subKeys: q.sub_statements.map((s) => s.key),
+  }));
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="flex max-h-[90vh] w-full max-w-3xl flex-col rounded-lg bg-white shadow-xl">
+      <div className="flex h-[90vh] w-full max-w-5xl flex-col rounded-lg bg-white shadow-xl">
         <div className="flex items-center justify-between border-b px-5 py-4">
           <div>
             <h2 className="font-semibold">Xem trước đề thi</h2>
@@ -29,69 +39,14 @@ export function ExamPreviewModal({
           </button>
         </div>
 
-        <div className="overflow-y-auto px-5 py-4">
-          <div className="mb-4 border-b pb-3">
+        <div className="min-h-0 flex-1 px-5 py-4">
+          <div className="mb-3">
             <h1 className="font-semibold">{exam.title}</h1>
             <p className="text-sm text-slate-500">
               {exam.subject} · {exam.duration_minutes} phút · {questions.length} câu
             </p>
           </div>
-
-          <div className="space-y-4">
-            {questions.map((q, idx) => {
-              const prevPart = idx > 0 ? questions[idx - 1].part_label : null;
-              const showPartHeader = q.part_label && q.part_label !== prevPart;
-              return (
-              <div key={q.id}>
-                {showPartHeader && <h2 className="mb-2 mt-2 font-bold">{q.part_label}</h2>}
-                <div className="rounded-lg border p-4">
-                <p className="mb-3">
-                  <span className="font-bold">Câu {idx + 1}.</span> <LatexText text={q.content_latex} />
-                </p>
-                {q.image_urls.length > 0 && (
-                  <div className="mb-3 flex flex-wrap gap-2">
-                    {q.image_urls.map((url, i) => (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img key={i} src={url} alt="" className="max-h-72 rounded border" />
-                    ))}
-                  </div>
-                )}
-
-                {q.type === "multiple_choice" && (
-                  <div className="space-y-2">
-                    {q.options.map((o) => (
-                      <div key={o.key} className="rounded-md border p-2 text-sm">
-                        <span className="font-medium">{o.key}.</span> <LatexText text={o.text_latex} />
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {q.type === "true_false_group" && (
-                  <div className="space-y-2">
-                    {q.sub_statements.map((s) => (
-                      <div key={s.key} className="rounded-md border p-2 text-sm">
-                        {s.key}) <LatexText text={s.text_latex} />
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {q.type === "short_answer" && (
-                  <div className="rounded-md border border-dashed p-2 text-sm text-slate-400">
-                    Học sinh nhập đáp án tại đây
-                  </div>
-                )}
-                </div>
-              </div>
-              );
-            })}
-            {!questions.length && (
-              <p className="rounded-lg border border-dashed p-8 text-center text-sm text-slate-500">
-                Đề thi chưa có câu hỏi nào.
-              </p>
-            )}
-          </div>
+          <QuestionAnswerSplit questions={splitQuestions} values={{}} />
         </div>
 
         <div className="flex items-center justify-end gap-3 border-t px-5 py-4">

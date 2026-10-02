@@ -2,18 +2,17 @@
 
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { LatexText } from "@/components/Latex";
+import { QuestionAnswerSplit, type SplitQuestion } from "@/components/QuestionAnswerSplit";
 import { useAntiCheat } from "@/hooks/useAntiCheat";
-import type { StudentAnswerPayload } from "@/types/exam";
+import type { QuestionType, StudentAnswerPayload } from "@/types/exam";
 
 interface ExamQuestion {
   id: string;
-  type: "multiple_choice" | "true_false_group" | "short_answer";
-  content_latex: string;
+  type: QuestionType;
   part_label: string | null;
-  image_urls: string[];
-  options: { key: string; text_latex: string }[];
-  sub_statements: { key: string; text_latex: string }[];
+  source_crop_url: string | null;
+  options: { key: string }[];
+  sub_statements: { key: string }[];
   max_score: number;
 }
 
@@ -37,7 +36,7 @@ export default function TakeExamPage({ params }: { params: Promise<{ sessionId: 
   const { sessionId } = use(params);
   const router = useRouter();
   const [data, setData] = useState<SessionData | null>(null);
-  const [answers, setAnswers] = useState<Record<string, StudentAnswerPayload>>({});
+  const [answers, setAnswers] = useState<Record<string, StudentAnswerPayload | null>>({});
   const [remaining, setRemaining] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const submittedRef = useRef(false);
@@ -48,7 +47,7 @@ export default function TakeExamPage({ params }: { params: Promise<{ sessionId: 
       .then((d: SessionData) => {
         setData(d);
         setRemaining(d.remaining_seconds);
-        const initial: Record<string, StudentAnswerPayload> = {};
+        const initial: Record<string, StudentAnswerPayload | null> = {};
         for (const a of d.existing_answers) initial[a.question_id] = a.answer;
         setAnswers(initial);
       });
@@ -115,9 +114,19 @@ export default function TakeExamPage({ params }: { params: Promise<{ sessionId: 
     );
   }
 
+  const splitQuestions: SplitQuestion[] = data.questions.map((q, idx) => ({
+    id: q.id,
+    number: idx + 1,
+    part_label: q.part_label,
+    source_crop_url: q.source_crop_url,
+    type: q.type,
+    optionKeys: q.options.map((o) => o.key),
+    subKeys: q.sub_statements.map((s) => s.key),
+  }));
+
   return (
-    <div className="min-h-screen bg-slate-50 pb-24">
-      <header className="sticky top-0 z-10 flex items-center justify-between border-b bg-white px-4 py-3 shadow-sm">
+    <div className="flex h-screen flex-col bg-slate-50">
+      <header className="flex shrink-0 items-center justify-between border-b bg-white px-4 py-3 shadow-sm">
         <h1 className="font-semibold">{data.exam_title}</h1>
         <span
           className={`rounded-md px-3 py-1 font-mono text-lg font-bold ${
@@ -128,101 +137,12 @@ export default function TakeExamPage({ params }: { params: Promise<{ sessionId: 
         </span>
       </header>
 
-      <div className="mx-auto max-w-3xl space-y-4 p-4">
-        {data.questions.map((q, idx) => {
-          const prevPart = idx > 0 ? data.questions[idx - 1].part_label : null;
-          const showPartHeader = q.part_label && q.part_label !== prevPart;
-          return (
-          <div key={q.id}>
-            {showPartHeader && <h2 className="mb-2 mt-2 font-bold">{q.part_label}</h2>}
-            <div className="rounded-lg border bg-white p-4">
-            <p className="mb-3">
-              <span className="font-bold">Câu {idx + 1}.</span> <LatexText text={q.content_latex} />
-            </p>
-            {q.image_urls.length > 0 && (
-              <div className="mb-3 flex flex-wrap gap-2">
-                {q.image_urls.map((url, i) => (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img key={i} src={url} alt="" className="max-h-72 rounded border" />
-                ))}
-              </div>
-            )}
-
-            {q.type === "multiple_choice" && (
-              <div className="space-y-2">
-                {q.options.map((o) => (
-                  <label
-                    key={o.key}
-                    className="flex cursor-pointer items-center gap-2 rounded-md border p-2 text-sm hover:bg-slate-50"
-                  >
-                    <input
-                      type="radio"
-                      name={q.id}
-                      checked={(answers[q.id] as { selected: string } | undefined)?.selected === o.key}
-                      onChange={() => saveAnswer(q.id, { selected: o.key })}
-                    />
-                    <span className="font-medium">{o.key}.</span> <LatexText text={o.text_latex} />
-                  </label>
-                ))}
-              </div>
-            )}
-
-            {q.type === "true_false_group" && (
-              <div className="space-y-2">
-                {q.sub_statements.map((s) => {
-                  const current = (answers[q.id] as { statements: Record<string, boolean> } | undefined)
-                    ?.statements ?? {};
-                  return (
-                    <div key={s.key} className="flex items-center justify-between rounded-md border p-2 text-sm">
-                      <span>
-                        {s.key}) <LatexText text={s.text_latex} />
-                      </span>
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            saveAnswer(q.id, { statements: { ...current, [s.key]: true } })
-                          }
-                          className={`rounded px-2 py-1 text-xs font-medium ${
-                            current[s.key] === true ? "bg-green-600 text-white" : "bg-slate-100"
-                          }`}
-                        >
-                          Đúng
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            saveAnswer(q.id, { statements: { ...current, [s.key]: false } })
-                          }
-                          className={`rounded px-2 py-1 text-xs font-medium ${
-                            current[s.key] === false ? "bg-red-600 text-white" : "bg-slate-100"
-                          }`}
-                        >
-                          Sai
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {q.type === "short_answer" && (
-              <input
-                value={(answers[q.id] as { text: string } | undefined)?.text ?? ""}
-                onChange={(e) => saveAnswer(q.id, { text: e.target.value })}
-                placeholder="Nhập đáp án"
-                className="w-full rounded-md border px-3 py-2 text-sm"
-              />
-            )}
-            </div>
-          </div>
-          );
-        })}
+      <div className="min-h-0 flex-1 p-4">
+        <QuestionAnswerSplit questions={splitQuestions} values={answers} onChange={saveAnswer} />
       </div>
 
-      <div className="fixed bottom-0 left-0 right-0 border-t bg-white p-4">
-        <div className="mx-auto flex max-w-3xl justify-end">
+      <div className="shrink-0 border-t bg-white p-3">
+        <div className="flex justify-end">
           <button
             onClick={submit}
             disabled={submitting}

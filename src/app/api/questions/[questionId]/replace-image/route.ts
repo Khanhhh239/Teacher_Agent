@@ -15,7 +15,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ que
 
   const { data: question } = await supabase
     .from("questions")
-    .select("id, exam_id, image_urls, exams!inner(teacher_id)")
+    .select("id, exam_id, image_urls, source_crop_url, exams!inner(teacher_id)")
     .eq("id", questionId)
     .single();
 
@@ -26,6 +26,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ que
   const formData = await request.formData();
   const file = formData.get("file") as File | null;
   const index = Number(formData.get("index") ?? -1);
+  // "crop" = thay ẢNH NỘI DUNG CHÍNH của câu (source_crop_url, dùng từ khi chuyển sang hiển thị
+  // ảnh gốc thay vì LaTeX) — mặc định thay cái này nếu không truyền index hợp lệ cho image_urls.
+  const target = String(formData.get("target") ?? (index >= 0 ? "image_urls" : "crop"));
   if (!file) {
     return NextResponse.json({ error: "Thiếu file ảnh" }, { status: 400 });
   }
@@ -41,6 +44,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ que
     return NextResponse.json({ error: uploadError.message }, { status: 500 });
   }
   const { data: pub } = supabase.storage.from("exam-images").getPublicUrl(path);
+
+  if (target === "crop") {
+    await supabase.from("questions").update({ source_crop_url: pub.publicUrl }).eq("id", questionId);
+    return NextResponse.json({ source_crop_url: pub.publicUrl });
+  }
 
   const currentUrls: string[] = question.image_urls ?? [];
   const newUrls =

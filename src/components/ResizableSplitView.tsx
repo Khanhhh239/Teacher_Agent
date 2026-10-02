@@ -7,9 +7,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * trích xuất (trái) với file đề gốc (phải) khi duyệt. Kéo được từ gần 0% (thu gọn gần hết
  * bên phải) tới gần 100% (bên phải chiếm gần hết màn hình).
  */
-export function ResizableSplitView({ left, right }: { left: React.ReactNode; right: React.ReactNode }) {
+export function ResizableSplitView({
+  left,
+  right,
+  initialRightWidthPct = 40,
+}: {
+  left: React.ReactNode;
+  right: React.ReactNode;
+  initialRightWidthPct?: number;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [rightWidthPct, setRightWidthPct] = useState(40);
+  const [rightWidthPct, setRightWidthPct] = useState(initialRightWidthPct);
   const draggingRef = useRef(false);
 
   const onPointerMove = useCallback((e: PointerEvent) => {

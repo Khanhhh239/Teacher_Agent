@@ -34,11 +34,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ ses
       return {
         id: q.id,
         type: q.type,
-        content_latex: q.content_latex,
         part_label: q.part_label,
-        image_urls: q.image_urls,
+        source_crop_url: q.source_crop_url ?? null,
         options,
-        sub_statements: q.sub_statements.map((s) => ({ key: s.key, text_latex: s.text_latex })),
+        sub_statements: q.sub_statements.map((s) => ({ key: s.key })),
         max_score: q.max_score,
         // KHÔNG trả correct_answer / short_answer_normalized cho học sinh
       };

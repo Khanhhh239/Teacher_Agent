@@ -4,7 +4,8 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
-const ACCEPTED_EXTS = ["docx", "pdf", "jpg", "jpeg", "png", "webp"];
+const EXAM_ACCEPTED_EXTS = ["pdf"];
+const ANSWER_ACCEPTED_EXTS = ["docx", "pdf", "jpg", "jpeg", "png", "webp"];
 
 function extOf(filename: string): string {
   return filename.split(".").pop()?.toLowerCase() ?? "";
@@ -13,11 +14,13 @@ function extOf(filename: string): string {
 function Dropzone({
   label,
   hint,
+  accept,
   file,
   onPick,
 }: {
   label: string;
   hint: string;
+  accept: string;
   file: File | null;
   onPick: (f: File | null) => void;
 }) {
@@ -61,7 +64,7 @@ function Dropzone({
         <input
           ref={inputRef}
           type="file"
-          accept=".docx,.pdf,.jpg,.jpeg,.png,.webp"
+          accept={accept}
           className="hidden"
           onChange={(e) => onPick(e.target.files?.[0] ?? null)}
         />
@@ -80,10 +83,10 @@ export default function NewExamPage() {
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
 
-  function pickFile(setter: (f: File | null) => void, f: File | null) {
+  function pickFile(setter: (f: File | null) => void, f: File | null, accepted: string[], errorMsg: string) {
     if (!f) return;
-    if (!ACCEPTED_EXTS.includes(extOf(f.name))) {
-      setError("Chỉ chấp nhận file .docx, .pdf hoặc ảnh (.jpg/.png/.webp)");
+    if (!accepted.includes(extOf(f.name))) {
+      setError(errorMsg);
       return;
     }
     setError(null);
@@ -169,7 +172,7 @@ export default function NewExamPage() {
       <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4">
         <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-slate-900" />
         <p className="text-slate-600">
-          Đang đọc đề thi và đáp án, ghép đáp án vào từng câu (có thể mất 1-2 phút)...
+          Đang cắt ảnh từng câu từ đề và đọc file đáp án (thường dưới 1 phút)...
         </p>
       </div>
     );
@@ -183,21 +186,24 @@ export default function NewExamPage() {
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Dropzone
             label="1. File đề thi"
-            hint=".docx, .pdf hoặc ảnh chụp"
+            hint="Chỉ nhận .pdf (xuất từ Word)"
+            accept=".pdf"
             file={file}
-            onPick={(f) => pickFile(setFile, f)}
+            onPick={(f) => pickFile(setFile, f, EXAM_ACCEPTED_EXTS, "File đề thi chỉ chấp nhận định dạng PDF (trong Word: File → Save As → PDF).")}
           />
           <Dropzone
             label="2. File đáp án"
             hint=".docx, .pdf hoặc ảnh chụp"
+            accept=".docx,.pdf,.jpg,.jpeg,.png,.webp"
             file={answerFile}
-            onPick={(f) => pickFile(setAnswerFile, f)}
+            onPick={(f) => pickFile(setAnswerFile, f, ANSWER_ACCEPTED_EXTS, "File đáp án chỉ chấp nhận .docx, .pdf hoặc ảnh (.jpg/.png/.webp).")}
           />
         </div>
         <p className="text-xs text-slate-500">
-          Cần upload cả 2 file — hệ thống sẽ tự đọc đáp án và điền sẵn vào từng câu (đánh dấu màu đỏ), bạn chỉ cần kiểm
-          tra lại và sửa nếu AI đọc sai. Nếu file .docx dùng công thức MathType/Equation cũ (phổ biến ở file soạn từ
-          lâu), hệ thống sẽ từ chối và yêu cầu bạn Save As sang PDF trong Word trước khi upload lại.
+          File đề thi dùng thẳng ẢNH GỐC cắt từ PDF làm nội dung câu hỏi (không chép lại thành chữ) để không còn lỗi
+          đọc sai công thức — vì vậy chỉ nhận file .pdf xuất từ Word, có lớp chữ thật (File → Save As → PDF). File đáp
+          án vẫn đọc bằng AI như trước, chấp nhận .docx/.pdf/ảnh. Loại câu và đáp án đúng lấy từ file đáp án; câu nào
+          thiếu đáp án sẽ cần giáo viên tự chọn ở bước duyệt.
         </p>
 
         <div className="grid grid-cols-2 gap-3">

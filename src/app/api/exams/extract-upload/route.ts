@@ -3,24 +3,16 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { detectDocxBranch, extractDocx } from "@/lib/extraction/docxExtract";
 import {
-  structureExamText,
-  extractPdfPages,
-  extractExamFromImage,
   extractAnswerKeyFromText,
   extractAnswerKeyFromPdf,
   extractAnswerKeyFromImage,
-  mergeAnswerKeyIntoQuestions,
 } from "@/lib/extraction/llmClient";
-import { normalizeExtractedExam } from "@/lib/extraction/normalize";
-import { convertToPdf } from "@/lib/conversion/cloudconvert";
-import { runQuestionPipeline, MODEL_B } from "@/lib/extraction/questionPipeline";
-import type { ExtractionMeta } from "@/types/exam";
+import { buildImageQuestions, buildQuestionsFromAnswerKey } from "@/lib/extraction/imageQuestionPipeline";
 
 export const runtime = "nodejs";
-// Gemini đôi khi mất 30-90s để sinh JSON dài (đề 20+ câu), cộng thêm tối đa 3 lần retry
-// khi gặp lỗi 503 quá tải (xem llmClient.ts) — đặt cao để giảm khả năng timeout giữa
-// chừng. File đáp án xử lý thêm sau file đề trong cùng 1 request nên cũng cần dư thời
-// gian. Vercel Hobby cho phép cấu hình tới 300s cho Node runtime function.
+// Đọc file đáp án vẫn cần AI (có thể là lời giải nhiều trang); việc tạo câu hỏi từ file đề thì
+// KHÔNG còn gọi AI nữa (xem imageQuestionPipeline.ts) nên nhanh hơn nhiều so với trước — vẫn
+// giữ trần cao để an toàn với file đáp án dài.
 export const maxDuration = 280;
 
 const IMAGE_EXTS = new Set(["jpg", "jpeg", "png", "webp"]);
@@ -31,9 +23,6 @@ function extOf(filename: string): string {
 
 export async function POST(request: Request) {
   const startedAt = Date.now();
-  // Trần thời gian xử lý bằng AI: sau mốc này không bắt đầu lệnh gọi mới (câu chưa đọc được sẽ
-  // thành câu chờ xử lý có cờ chặn) — đảm bảo không bao giờ vượt maxDuration=280s của Vercel.
-  const READ_DEADLINE = startedAt + 215_000;
   const ANSWER_DEADLINE = startedAt + 235_000;
   const supabase = await createClient();
   const {
@@ -58,9 +47,6 @@ export async function POST(request: Request) {
   if (!answerFilePathRaw || !answerFileNameRaw) {
     return NextResponse.json({ error: "Thiếu file đáp án — cần upload cả đề và đáp án" }, { status: 400 });
   }
-  // Gán lại sang biến `string` thường (không phải `string | undefined`) sau khi đã kiểm tra
-  // ở trên — TS không giữ được narrowing của biến ngoài khi dùng trong closure khai báo bên
-  // dưới (processExamFile/processAnswerKeyFile), nên cần tách biến tường minh thế này.
   const filePath: string = filePathRaw;
   const fileName: string = fileNameRaw;
   const answerFilePath: string = answerFilePathRaw;
@@ -74,6 +60,22 @@ export async function POST(request: Request) {
 
   const ext = extOf(fileName);
   const answerExt = extOf(answerFileName);
+
+  // Đề thi: CHỈ nhận PDF — nội dung câu hỏi giờ dùng thẳng ảnh cắt từ PDF (không còn chép lại
+  // thành LaTeX), và việc phân đoạn từng câu dựa vào LỚP CHỮ của PDF (xem imageQuestionPipeline.ts),
+  // nên cần đúng định dạng PDF xuất từ Word/trình soạn thảo (không phải ảnh quét/docx).
+  if (ext !== "pdf") {
+    await cleanupTmp();
+    return NextResponse.json(
+      { error: "File đề thi chỉ chấp nhận định dạng PDF (xuất từ Word: File → Save As → PDF). Nếu đang có file .docx, hãy chuyển sang PDF rồi upload lại." },
+      { status: 400 }
+    );
+  }
+  if (!IMAGE_EXTS.has(answerExt) && answerExt !== "pdf" && answerExt !== "docx") {
+    await cleanupTmp();
+    return NextResponse.json({ error: "File đáp án chỉ hỗ trợ .docx, .pdf hoặc ảnh (.jpg/.png)" }, { status: 400 });
+  }
+
   let buffer: Buffer;
   let answerBuffer: Buffer;
   try {
@@ -95,162 +97,75 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: `Lỗi tải file đã upload: ${message}` }, { status: 500 });
   }
 
-  const warnings: string[] = [];
-
-  if (!IMAGE_EXTS.has(ext) && ext !== "pdf" && ext !== "docx") {
-    await cleanupTmp();
-    return NextResponse.json({ error: "File đề thi chỉ hỗ trợ .docx, .pdf hoặc ảnh (.jpg/.png)" }, { status: 400 });
-  }
-  if (!IMAGE_EXTS.has(answerExt) && answerExt !== "pdf" && answerExt !== "docx") {
-    await cleanupTmp();
-    return NextResponse.json({ error: "File đáp án chỉ hỗ trợ .docx, .pdf hoặc ảnh (.jpg/.png)" }, { status: 400 });
-  }
-
-  // Docx dùng công thức MathType/Equation cũ (ảnh WMF nhúng, không phải XML toán học) không
-  // đọc được chính xác và trước đây phải fallback qua CloudConvert (dịch vụ trả phí, có lúc
-  // hết credit — xem lịch sử) để convert sang PDF rồi mới đọc được. Thay vì fallback tốn
-  // kém/chậm/phụ thuộc bên thứ 3, từ chối thẳng ngay lúc upload và yêu cầu giáo viên tự
-  // convert sang PDF trong Word (Word render công thức chính xác hơn bất kỳ cách nào khác) —
-  // docx hiện đại (công thức Word gốc hoặc không có công thức) vẫn được xử lý bình thường,
-  // nhanh và chính xác 100% vì không cần qua Gemini vision.
-  const MATHTYPE_REJECT_MESSAGE = (which: string) =>
-    `${which} dùng công thức MathType/Equation cũ (ảnh WMF) mà hệ thống không đọc chính xác được. Vui lòng mở file trong Microsoft Word, chọn "Save As" (Lưu dưới dạng khác) → chọn định dạng PDF, rồi tải file PDF đó lên thay cho file .docx.`;
-  const [fileBranchPre, answerBranchPre] = await Promise.all([
-    ext === "docx" ? detectDocxBranch(buffer) : null,
-    answerExt === "docx" ? detectDocxBranch(answerBuffer) : null,
-  ]);
-  if (fileBranchPre === "LEGACY_OLE_IMAGE" && answerBranchPre === "LEGACY_OLE_IMAGE") {
-    await cleanupTmp();
-    return NextResponse.json({ error: MATHTYPE_REJECT_MESSAGE("File đề thi và file đáp án đều") }, { status: 400 });
-  }
-  if (fileBranchPre === "LEGACY_OLE_IMAGE") {
-    await cleanupTmp();
-    return NextResponse.json({ error: MATHTYPE_REJECT_MESSAGE("File đề thi") }, { status: 400 });
-  }
+  // Docx đáp án dùng công thức MathType/Equation cũ (ảnh WMF) không đọc chính xác được —
+  // từ chối ngay, yêu cầu chuyển sang PDF (xem lịch sử: CloudConvert dùng làm fallback trước
+  // đây tốn kém/chậm/phụ thuộc bên thứ 3 và có lúc hết credit).
+  const answerBranchPre = answerExt === "docx" ? await detectDocxBranch(answerBuffer) : null;
   if (answerBranchPre === "LEGACY_OLE_IMAGE") {
     await cleanupTmp();
-    return NextResponse.json({ error: MATHTYPE_REJECT_MESSAGE("File đáp án") }, { status: 400 });
+    return NextResponse.json(
+      {
+        error:
+          'File đáp án dùng công thức MathType/Equation cũ (ảnh WMF) mà hệ thống không đọc chính xác được. Vui lòng mở file trong Microsoft Word, chọn "Save As" → chọn định dạng PDF, rồi tải file PDF đó lên thay cho file .docx.',
+      },
+      { status: 400 }
+    );
   }
 
-  /**
-   * Xử lý file đề và file đáp án ĐỘC LẬP, chạy SONG SONG bằng Promise.all thay vì tuần tự
-   * — trước đây xử lý nối tiếp 2 file (đề xong mới tới đáp án) có lúc cộng dồn tới >190s cho
-   * 1 đề 22 câu có công thức MathType cũ, sát ngưỡng maxDuration=280s; khi Gemini chậm hơn
-   * bình thường (quan sát thực tế: lỗi RECITATION phải retry) tổng thời gian có thể VƯỢT
-   * maxDuration, khiến Vercel tự cắt request và trả về trang lỗi HTML (không phải JSON) —
-   * đây chính là nguồn gốc lỗi "Unexpected token... is not valid JSON" khi xử lý quá lâu
-   * (khác với lỗi JSON do vượt body size đã sửa trước đó). Chạy song song giúp tổng thời
-   * gian gần bằng thời gian của file CHẬM HƠN thay vì tổng cả 2, giảm đáng kể rủi ro timeout.
-   */
-  async function processExamFile(): Promise<{
-    extracted: ReturnType<typeof normalizeExtractedExam>;
-    localImages: Map<string, Buffer> | null;
-    previewPdfBuffer: Buffer | null;
-    crops: Map<number, Buffer> | null;
-    metas: ExtractionMeta[] | null;
-  }> {
-    let extracted: ReturnType<typeof normalizeExtractedExam>;
-    let localImages: Map<string, Buffer> | null = null;
-    let previewPdfBuffer: Buffer | null = null;
-    let crops: Map<number, Buffer> | null = null;
-    let metas: ExtractionMeta[] | null = null;
-
-    try {
-      if (ext === "docx") {
-        // fileBranchPre chỉ có thể là OMML_NATIVE/NO_MATH_DETECTED ở đây — LEGACY_OLE_IMAGE
-        // đã bị từ chối sớm ở trên trước khi vào hàm này.
-        const result = await extractDocx(buffer);
-        localImages = result.images;
-        warnings.push(...result.warnings);
-        const structured = await structureExamText(result.text, warnings);
-        extracted = normalizeExtractedExam({ ...structured, source_branch: fileBranchPre ?? "NO_MATH_DETECTED" });
-        // Convert thêm 1 lần CHỈ để làm file xem trước đối chiếu bên phải màn hình duyệt đề
-        // (không ảnh hưởng độ chính xác trích xuất) — không chặn cả lần upload nếu lỗi.
-        try {
-          previewPdfBuffer = await convertToPdf(buffer, fileName);
-        } catch {
-          // không có bản xem trước PDF — OriginalFileViewer sẽ chỉ hiện link tải file .docx
-        }
-      } else if (ext === "pdf") {
-        // PDF có lớp chữ (xuất từ Word...): đọc TỪNG CÂU, 2 lần độc lập, có kiểm chứng + cờ.
-        // Không phân đoạn được (bản quét, nhãn câu không liên tục...) thì dùng cách đọc cả trang cũ.
-        const v2 = await runQuestionPipeline(buffer, warnings, { deadline: READ_DEADLINE });
-        if (v2) {
-          localImages = v2.images;
-          crops = v2.crops;
-          metas = v2.metas;
-          extracted = normalizeExtractedExam({ ...v2.extracted, source_branch: "PDF_TEXT_LAYER" });
-        } else {
-          const { extracted: pdfExtracted, images } = await extractPdfPages(buffer, warnings);
-          localImages = images;
-          extracted = normalizeExtractedExam({ ...pdfExtracted, source_branch: "PDF_IMAGE_ONLY" });
-        }
-      } else {
-        const { extracted: imgExtracted, images } = await extractExamFromImage(buffer, warnings);
-        localImages = images;
-        extracted = normalizeExtractedExam({ ...imgExtracted, source_branch: "PDF_IMAGE_ONLY" });
-      }
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      throw new Error(`Lỗi xử lý file đề thi: ${message}`);
-    }
-
-    return { extracted, localImages, previewPdfBuffer, crops, metas };
+  // 1) Phân đoạn + cắt ảnh từng câu từ PDF đề — HOÀN TOÀN BẰNG CODE, không gọi AI. Trả lỗi rõ
+  // ràng nếu PDF không có lớp chữ (vd bản quét/ảnh) hoặc số thứ tự câu không liên tục.
+  const imageResult = await buildImageQuestions(buffer);
+  if (!imageResult.ok) {
+    await cleanupTmp();
+    return NextResponse.json(
+      { error: `Không phân đoạn được đề thi: ${imageResult.reason}. Hệ thống cần file PDF xuất trực tiếp từ Word (có lớp chữ thật, đánh số "Câu 1.", "Câu 2."... liên tục), không phải bản quét/chụp ảnh.` },
+      { status: 400 }
+    );
   }
+  const questionCount = imageResult.questions.length;
 
-  async function processAnswerKeyFile() {
-    try {
-      let answerKey;
-      if (answerExt === "docx") {
-        // answerBranchPre chỉ có thể là OMML_NATIVE/NO_MATH_DETECTED ở đây — LEGACY_OLE_IMAGE
-        // đã bị từ chối sớm ở trên trước khi vào hàm này.
-        const result = await extractDocx(answerBuffer);
-        answerKey = await extractAnswerKeyFromText(result.text, warnings);
-      } else if (answerExt === "pdf") {
-        // Đọc đáp án bằng model B (hạn mức free tính riêng từng model) để không tranh hạn mức với
-        // phần đọc đề (model A).
-        answerKey = await extractAnswerKeyFromPdf(answerBuffer, warnings, { model: MODEL_B, deadline: ANSWER_DEADLINE });
-      } else {
-        answerKey = await extractAnswerKeyFromImage(
-          answerBuffer.toString("base64"),
-          `image/${answerExt === "jpg" ? "jpeg" : answerExt}`,
-          warnings,
-          MODEL_B
-        );
-      }
-      if (answerKey.length === 0) {
-        warnings.push("Không đọc được đáp án nào từ file đáp án — giáo viên cần tự điền đáp án ở bước duyệt.");
-      }
-      return answerKey;
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      throw new Error(`Lỗi xử lý file đáp án: ${message}`);
-    }
-  }
-
-  let examResult: Awaited<ReturnType<typeof processExamFile>>;
-  let answerKey: Awaited<ReturnType<typeof processAnswerKeyFile>>;
+  // 2) Đọc file đáp án (vẫn cần AI — có thể là lời giải dài, ảnh chụp, hay bảng ngắn gọn).
+  const warnings: string[] = [];
+  let answerKey;
   try {
-    [examResult, answerKey] = await Promise.all([processExamFile(), processAnswerKeyFile()]);
+    if (answerExt === "docx") {
+      const result = await extractDocx(answerBuffer);
+      answerKey = await extractAnswerKeyFromText(result.text, warnings);
+    } else if (answerExt === "pdf") {
+      answerKey = await extractAnswerKeyFromPdf(answerBuffer, warnings, { deadline: ANSWER_DEADLINE });
+    } else {
+      answerKey = await extractAnswerKeyFromImage(answerBuffer.toString("base64"), `image/${answerExt === "jpg" ? "jpeg" : answerExt}`, warnings);
+    }
+    if (answerKey.length === 0) {
+      warnings.push("Không đọc được đáp án nào từ file đáp án — giáo viên cần tự điền đáp án ở bước duyệt.");
+    }
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     await cleanupTmp();
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: `Lỗi xử lý file đáp án: ${message}` }, { status: 500 });
   }
 
-  const { localImages, previewPdfBuffer, crops } = examResult;
-  const withMeta = examResult.extracted.questions.map((q, i) => ({ ...q, extraction_meta: examResult.metas?.[i] ?? null }));
-  const extracted = { ...examResult.extracted, questions: mergeAnswerKeyIntoQuestions(withMeta, answerKey, warnings) };
+  // 3) Ghép câu hỏi với đáp án — loại câu (trắc nghiệm/đúng-sai/điền ngắn) và đáp án đúng lấy
+  // HOÀN TOÀN từ file đáp án, không cần AI đọc hiểu nội dung đề.
+  const rows = buildQuestionsFromAnswerKey(
+    questionCount,
+    imageResult.questions.map((q) => q.part),
+    answerKey
+  );
+  const blockingCount = rows.filter((r) => r.blocking).length;
+  if (blockingCount > 0) {
+    warnings.push(`${blockingCount} câu chưa có đáp án khớp trong file đáp án — giáo viên cần tự chọn loại câu và đáp án đúng cho các câu này ở bước duyệt.`);
+  }
 
   const { data: exam, error: examError } = await supabase
     .from("exams")
     .insert({
       teacher_id: user.id,
-      title: extracted.title,
-      subject: extracted.subject,
+      title: imageResult.title || "Đề thi chưa đặt tên",
+      subject: "",
       duration_minutes: durationMinutes,
       status: "reviewing",
-      source_branch: extracted.source_branch,
+      source_branch: "PDF_TEXT_LAYER",
     })
     .select()
     .single();
@@ -260,100 +175,56 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: examError?.message ?? "Không tạo được đề thi" }, { status: 500 });
   }
 
-  // Lưu lại file đề gốc để giáo viên đối chiếu song song với đề đã trích xuất lúc duyệt
-  // (xem src/app/dashboard/exams/[examId]/page.tsx) — không chặn cả lần upload nếu lỗi.
+  // Lưu file PDF gốc để giáo viên xem lại (iframe render trực tiếp được vì input đã là PDF,
+  // không cần convert gì thêm nữa) — không chặn cả lần upload nếu lỗi.
   try {
-    const originalPath = `${exam.id}/original.${ext}`;
-    const contentType =
-      ext === "pdf"
-        ? "application/pdf"
-        : ext === "docx"
-          ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-          : `image/${ext === "jpg" ? "jpeg" : ext}`;
+    const originalPath = `${exam.id}/original.pdf`;
     const { error: originalUploadError } = await supabase.storage
       .from("exam-images")
-      .upload(originalPath, buffer, { contentType });
-    const examUpdate: Record<string, string> = {};
+      .upload(originalPath, buffer, { contentType: "application/pdf" });
     if (!originalUploadError) {
       const { data: pub } = supabase.storage.from("exam-images").getPublicUrl(originalPath);
-      examUpdate.original_file_url = pub.publicUrl;
-      examUpdate.original_file_ext = ext;
-    }
-    if (previewPdfBuffer) {
-      const previewPath = `${exam.id}/original_preview.pdf`;
-      const { error: previewUploadError } = await supabase.storage
-        .from("exam-images")
-        .upload(previewPath, previewPdfBuffer, { contentType: "application/pdf" });
-      if (!previewUploadError) {
-        const { data: previewPub } = supabase.storage.from("exam-images").getPublicUrl(previewPath);
-        examUpdate.original_preview_url = previewPub.publicUrl;
-      }
-    }
-    if (Object.keys(examUpdate).length > 0) {
-      await supabase.from("exams").update(examUpdate).eq("id", exam.id);
+      await supabase.from("exams").update({ original_file_url: pub.publicUrl, original_file_ext: "pdf" }).eq("id", exam.id);
     }
   } catch {
-    // không chặn upload chính nếu lưu file gốc/bản xem trước thất bại
+    // không chặn upload chính nếu lưu file gốc thất bại
   }
 
-  let newColumnsAvailable = true;
-  for (let i = 0; i < extracted.questions.length; i++) {
-    const q = extracted.questions[i];
-    const imageUrls: string[] = [];
+  for (let i = 0; i < questionCount; i++) {
+    const row = rows[i];
+    const cropImage = imageResult.questions[i].image;
 
-    for (const localName of q.image_urls) {
-      if (!localImages?.has(localName)) continue;
-      const imgBuffer = localImages.get(localName)!;
-      const path = `${exam.id}/${crypto.randomUUID()}-${localName}`;
-      const { error: uploadError } = await supabase.storage.from("exam-images").upload(path, imgBuffer, {
-        contentType: `image/${localName.split(".").pop()}`,
-      });
-      if (!uploadError) {
-        const { data: pub } = supabase.storage.from("exam-images").getPublicUrl(path);
-        imageUrls.push(pub.publicUrl);
-      }
-    }
-
-    // Ảnh crop gốc của riêng câu này để giáo viên đối chiếu ở trang duyệt.
     let sourceCropUrl: string | null = null;
-    const crop = crops?.get(i);
-    if (crop) {
+    try {
       const cropPath = `${exam.id}/src/q${i + 1}.png`;
-      const { error: cropError } = await supabase.storage.from("exam-images").upload(cropPath, crop, { contentType: "image/png" });
+      const { error: cropError } = await supabase.storage.from("exam-images").upload(cropPath, cropImage, { contentType: "image/png" });
       if (!cropError) sourceCropUrl = supabase.storage.from("exam-images").getPublicUrl(cropPath).data.publicUrl;
+    } catch {
+      // không có ảnh — câu này hiển thị trống, giáo viên cần thay ảnh thủ công ở bước duyệt
     }
+    if (!sourceCropUrl) row.flags.push("Không lưu được ảnh câu hỏi — cần giáo viên tự chụp/thay ảnh ở bước duyệt.");
 
-    const flags = q.extraction_meta?.flags ?? [];
-    const notes = [q.raw_ocr_notes, ...flags].filter((x): x is string => Boolean(x && x.trim())).join(" • ") || null;
-
-    const row = {
+    const { error: insertError } = await supabase.from("questions").insert({
       exam_id: exam.id,
       order_index: i,
-      type: q.type,
-      content_latex: q.content_latex,
-      part_label: q.part_label,
-      image_urls: imageUrls,
-      options: q.options,
-      sub_statements: q.sub_statements,
-      correct_answer: q.correct_answer,
-      short_answer_normalized: q.short_answer_normalized,
-      score_rule: q.score_rule,
-      max_score: q.max_score,
-      raw_ocr_notes: notes,
-      needs_review: true,
-    };
-    // Cột source_crop_url / extraction_meta cần migration 0007. Chưa chạy migration thì vẫn lưu
-    // câu hỏi bình thường (fail-open) — chỉ mất phần ảnh đối chiếu và cờ có cấu trúc.
-    let { error: insertError } = newColumnsAvailable
-      ? await supabase.from("questions").insert({ ...row, source_crop_url: sourceCropUrl, extraction_meta: q.extraction_meta ?? null })
-      : { error: null as { message: string } | null };
-    if (!newColumnsAvailable || (insertError && /source_crop_url|extraction_meta/.test(insertError.message))) {
-      newColumnsAvailable = false;
-      ({ error: insertError } = await supabase.from("questions").insert(row));
-    }
+      type: row.type,
+      content_latex: "",
+      part_label: row.part_label,
+      image_urls: [],
+      source_crop_url: sourceCropUrl,
+      options: row.options,
+      sub_statements: row.sub_statements,
+      correct_answer: row.correct_answer,
+      short_answer_normalized: row.short_answer_normalized,
+      score_rule: row.score_rule,
+      max_score: row.max_score,
+      raw_ocr_notes: null,
+      needs_review: row.blocking,
+      extraction_meta: { flags: row.flags, blocking: row.blocking, source: "text_layer" },
+    });
     if (insertError) warnings.push(`Không lưu được câu ${i + 1}: ${insertError.message}`);
   }
 
   await cleanupTmp();
-  return NextResponse.json({ exam_id: exam.id, question_count: extracted.questions.length, warnings });
+  return NextResponse.json({ exam_id: exam.id, question_count: questionCount, warnings });
 }

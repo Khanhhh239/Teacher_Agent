@@ -1,9 +1,7 @@
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { QuestionEditor } from "@/components/QuestionEditor";
+import { ExamReviewBoard } from "@/components/ExamReviewBoard";
 import { ExamStatusControls } from "@/components/ExamStatusControls";
-import { ResizableSplitView } from "@/components/ResizableSplitView";
-import { OriginalFileViewer } from "@/components/OriginalFileViewer";
 import type { Exam, Question } from "@/types/exam";
 
 export default async function ExamReviewPage({
@@ -27,49 +25,29 @@ export default async function ExamReviewPage({
   const flaggedCount = (questions as Question[] | null)?.filter((q) => (q.extraction_meta?.flags.length ?? 0) > 0).length ?? 0;
 
   return (
-    <div>
-      <div className="mb-4 flex items-center justify-between">
+    <div className="flex h-[calc(100vh-4rem)] flex-col">
+      <div className="mb-4 flex shrink-0 items-center justify-between">
         <div>
           <h1 className="text-lg font-semibold">{(exam as Exam).title}</h1>
           <p className="text-sm text-slate-500">
-            {(exam as Exam).subject} · {(exam as Exam).duration_minutes} phút ·{" "}
-            {(questions as Question[] | null)?.length ?? 0} câu
+            {(exam as Exam).subject} · {(exam as Exam).duration_minutes} phút · {(questions as Question[] | null)?.length ?? 0} câu
             {flaggedCount > 0 && <span className="font-medium text-amber-700"> · {flaggedCount} câu có cờ cảnh báo, soát kỹ các câu này</span>}
+            {(exam as Exam).original_file_url && (
+              <>
+                {" · "}
+                <a href={(exam as Exam).original_file_url!} target="_blank" rel="noreferrer" className="underline hover:text-slate-700">
+                  Xem file PDF gốc
+                </a>
+              </>
+            )}
           </p>
         </div>
-        <ExamStatusControls
-          exam={exam as Exam}
-          questions={(questions as Question[] | null) ?? []}
-          pendingReview={pendingReview}
-        />
+        <ExamStatusControls exam={exam as Exam} questions={(questions as Question[] | null) ?? []} pendingReview={pendingReview} />
       </div>
 
-      <ResizableSplitView
-        left={
-          <div className="space-y-3">
-            {(questions as Question[] | null)?.map((q) => (
-              <QuestionEditor key={q.id} question={q} />
-            ))}
-            {!questions?.length && (
-              <p className="rounded-lg border border-dashed p-8 text-center text-sm text-slate-500">
-                Chưa có câu hỏi nào. Import từ pipeline hoặc thêm thủ công.
-              </p>
-            )}
-          </div>
-        }
-        right={
-          <div>
-            <p className="mb-2 text-xs font-medium text-slate-500">
-              Đề gốc — kéo thanh bên trái để thu/giãn khung này
-            </p>
-            <OriginalFileViewer
-              url={(exam as Exam).original_file_url}
-              ext={(exam as Exam).original_file_ext}
-              previewUrl={(exam as Exam).original_preview_url}
-            />
-          </div>
-        }
-      />
+      <div className="min-h-0 flex-1">
+        <ExamReviewBoard questions={(questions as Question[] | null) ?? []} />
+      </div>
     </div>
   );
 }

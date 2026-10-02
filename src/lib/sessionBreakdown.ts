@@ -26,9 +26,8 @@ export async function buildSessionBreakdown(
       return {
         id: q.id,
         type: q.type,
-        content_latex: q.content_latex,
         part_label: q.part_label,
-        image_urls: q.image_urls,
+        source_crop_url: q.source_crop_url ?? null,
         options,
         sub_statements: q.sub_statements,
         max_score: q.max_score,

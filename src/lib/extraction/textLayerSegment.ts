@@ -32,6 +32,12 @@ export interface QuestionBlock {
   number: number;
   part: string | null;
   segments: Segment[];
+  /** Dòng chứa nhãn "Câu N." gốc — dùng để xóa đúng phần nhãn khỏi ảnh crop (số câu hiển thị
+   * cho học sinh là số VỊ TRÍ sau khi xáo trộn, không phải số in sẵn trong PDF). */
+  labelLine: TextLine;
+  /** Số ký tự của chuỗi khớp "Câu N." (kể cả dấu chấm/hai chấm), dùng để tính điểm cắt theo
+   * toạ độ TỪNG KÝ TỰ (xem eraseQuestionLabels trong questionPipeline.ts). */
+  labelLength: number;
 }
 
 export type SegmentResult =
@@ -55,6 +61,8 @@ interface Boundary {
   y0: number;
   number: number;
   text: string;
+  line: TextLine;
+  matchLength: number;
 }
 
 export function segmentFromLines(pages: PageLines[]): SegmentResult {
@@ -83,11 +91,11 @@ export function segmentFromLines(pages: PageLines[]): SegmentResult {
       if (line.x0 > pages[pageIndex].width * 0.4) continue; // nhãn câu luôn nằm sát lề trái
       const q = Q_ANCHOR.exec(line.text);
       if (q) {
-        boundaries.push({ kind: "q", page: pageIndex, y0: line.y0, number: Number(q[1]), text: line.text.trim() });
+        boundaries.push({ kind: "q", page: pageIndex, y0: line.y0, number: Number(q[1]), text: line.text.trim(), line, matchLength: q[0].length });
         continue;
       }
       if (PART_ANCHOR.test(line.text)) {
-        boundaries.push({ kind: "part", page: pageIndex, y0: line.y0, number: 0, text: line.text.trim() });
+        boundaries.push({ kind: "part", page: pageIndex, y0: line.y0, number: 0, text: line.text.trim(), line, matchLength: 0 });
       }
     }
   });
@@ -143,7 +151,7 @@ export function segmentFromLines(pages: PageLines[]): SegmentResult {
         }
       }
     }
-    blocks.push({ number: a.number, part: currentPart, segments });
+    blocks.push({ number: a.number, part: currentPart, segments, labelLine: a.line, labelLength: a.matchLength });
   }
 
   // Tiêu đề đề thi: dòng chữ đầu tiên của trang 1 nằm trước nhãn đầu tiên.
