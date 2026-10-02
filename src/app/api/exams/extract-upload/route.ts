@@ -211,7 +211,7 @@ export async function POST(request: Request) {
   }
 
   const { localImages, previewPdfBuffer } = examResult;
-  const extracted = { ...examResult.extracted, questions: mergeAnswerKeyIntoQuestions(examResult.extracted.questions, answerKey) };
+  const extracted = { ...examResult.extracted, questions: mergeAnswerKeyIntoQuestions(examResult.extracted.questions, answerKey, warnings) };
 
   const { data: exam, error: examError } = await supabase
     .from("exams")

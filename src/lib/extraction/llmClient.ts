@@ -612,19 +612,77 @@ export async function extractAnswerKeyFromPdf(buffer: Buffer, warnings?: string[
  * câu hỏi. Câu nào không có đáp án khớp thì giữ nguyên null/false mặc định (giáo viên tự
  * điền tay ở bước duyệt). KHÔNG gọi thêm Gemini — chỉ là object merge thuần JS.
  */
+type KeyKind = "multiple_choice" | "true_false_group" | "short_answer";
+
+const TYPE_DEFAULTS: Record<KeyKind, { score_rule: ExtractedExam["questions"][number]["score_rule"]; max_score: number }> = {
+  multiple_choice: { score_rule: "standard", max_score: 0.25 },
+  true_false_group: { score_rule: "thpt2025_truefalse_partial", max_score: 1.0 },
+  short_answer: { score_rule: "standard", max_score: 0.5 },
+};
+
+/** Loại câu theo DỮ LIỆU thực tế của mục đáp án (có mệnh đề Đúng/Sai → đúng/sai; có chữ cái
+ * → trắc nghiệm; có giá trị → điền ngắn) thay vì tin nhãn "type" model tự gán cho mục đó. */
+function keyKind(e: AnswerKeyEntry): KeyKind | null {
+  if (e.sub_statements?.length) return "true_false_group";
+  if (e.correct_answer) return "multiple_choice";
+  if (e.value) return "short_answer";
+  return null;
+}
+
+/**
+ * File đáp án là nguồn đáng tin hơn về LOẠI câu (bảng đáp án rất rõ: chữ cái / Đ-S / số), trong
+ * khi loại câu AI tự suy từ ảnh đề đã sai thật (câu điền đáp án bị gán trắc nghiệm...). Chỉ
+ * đổi loại khi hình dạng câu hỏi KHÔNG mâu thuẫn với loại trong file đáp án (vd file đáp án nói
+ * "điền ngắn" thì câu phải không có lựa chọn/mệnh đề nào). Nếu mâu thuẫn (câu có 4 lựa chọn mà
+ * đáp án lại là số) thì nhiều khả năng đánh số bị lệch — KHÔNG ghép, để cảnh báo cho giáo viên.
+ */
+function reconcileTypeWithKey(
+  q: ExtractedExam["questions"][number],
+  kind: KeyKind
+): { q: ExtractedExam["questions"][number]; ok: boolean } {
+  if (q.type === kind) return { q, ok: true };
+  const opts = q.options?.length ?? 0;
+  const subs = q.sub_statements?.length ?? 0;
+  const compatible =
+    kind === "short_answer" ? opts === 0 && subs === 0 : kind === "multiple_choice" ? opts > 0 && subs === 0 : subs > 0 && opts === 0;
+  if (!compatible) return { q, ok: false };
+  return { q: { ...q, type: kind, ...TYPE_DEFAULTS[kind] }, ok: true };
+}
+
 export function mergeAnswerKeyIntoQuestions(
   questions: ExtractedExam["questions"],
-  answerKey: AnswerKeyEntry[]
+  answerKey: AnswerKeyEntry[],
+  warnings?: string[]
 ): ExtractedExam["questions"] {
   const byNumber = new Map(answerKey.map((a) => [a.question_number, a]));
-  return questions.map((q, idx) => {
-    const entry = byNumber.get(idx + 1);
-    if (!entry) return q;
-    if (q.type === "multiple_choice" && entry.correct_answer) {
-      return { ...q, correct_answer: entry.correct_answer };
+  const typeFixed: number[] = [];
+  const mismatched: number[] = [];
+  const missing: number[] = [];
+  const partialStatements: string[] = [];
+
+  const merged = questions.map((q0, idx) => {
+    const n = idx + 1;
+    const entry = byNumber.get(n);
+    const kind = entry ? keyKind(entry) : null;
+    if (!entry || !kind) {
+      missing.push(n);
+      return q0;
     }
-    if (q.type === "true_false_group" && entry.sub_statements?.length) {
-      const answerByKey = new Map(entry.sub_statements.map((s) => [s.key, s.answer]));
+    const { q, ok } = reconcileTypeWithKey(q0, kind);
+    if (!ok) {
+      mismatched.push(n);
+      return q0;
+    }
+    if (q !== q0) typeFixed.push(n);
+
+    if (kind === "multiple_choice") {
+      return { ...q, correct_answer: String(entry.correct_answer).trim().toUpperCase() };
+    }
+    if (kind === "true_false_group") {
+      const answerByKey = new Map((entry.sub_statements ?? []).map((s) => [s.key, s.answer]));
+      if (answerByKey.size > q.sub_statements.length) {
+        partialStatements.push(`${n} (đọc được ${q.sub_statements.length}/${answerByKey.size} mệnh đề)`);
+      }
       return {
         ...q,
         sub_statements: q.sub_statements.map((s) => ({
@@ -633,11 +691,30 @@ export function mergeAnswerKeyIntoQuestions(
         })),
       };
     }
-    if (q.type === "short_answer" && entry.value) {
-      return { ...q, short_answer_normalized: entry.value };
-    }
-    return q;
+    return { ...q, short_answer_normalized: String(entry.value).trim() };
   });
+
+  if (warnings) {
+    if (typeFixed.length) {
+      warnings.push(`Đã tự sửa loại câu hỏi theo file đáp án cho câu: ${typeFixed.join(", ")}.`);
+    }
+    if (mismatched.length) {
+      warnings.push(
+        `Câu ${mismatched.join(", ")}: loại câu hỏi không khớp loại đáp án trong file đáp án (nhiều khả năng đánh số lệch hoặc AI đọc sai cấu trúc câu) — hệ thống KHÔNG ghép đáp án cho các câu này, cần kiểm tra tay.`
+      );
+    }
+    if (partialStatements.length) {
+      warnings.push(`Câu đúng/sai thiếu mệnh đề so với file đáp án: ${partialStatements.join("; ")} — kiểm tra lại nội dung đề.`);
+    }
+    if (missing.length) {
+      warnings.push(`Chưa có đáp án cho câu: ${missing.join(", ")} — giáo viên tự điền ở bước duyệt.`);
+    }
+    const keyCount = new Set(answerKey.map((a) => a.question_number)).size;
+    if (keyCount > 0 && keyCount !== questions.length) {
+      warnings.push(`Đề đọc được ${questions.length} câu nhưng file đáp án có ${keyCount} câu — kiểm tra xem có câu nào bị sót/gộp không.`);
+    }
+  }
+  return merged;
 }
 
 interface PdfPageResult {
