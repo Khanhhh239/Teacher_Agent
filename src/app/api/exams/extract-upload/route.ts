@@ -40,17 +40,24 @@ export async function POST(request: Request) {
   // bỏ qua giới hạn ~4.5MB request body của Vercel Hobby) thay vì nhận bytes file trực
   // tiếp qua formData — xem src/app/dashboard/exams/new/page.tsx.
   const body = await request.json();
-  const filePath: string | undefined = body.file_path;
-  const fileName: string | undefined = body.file_name;
-  const answerFilePath: string | undefined = body.answer_file_path;
-  const answerFileName: string | undefined = body.answer_file_name;
+  const filePathRaw: string | undefined = body.file_path;
+  const fileNameRaw: string | undefined = body.file_name;
+  const answerFilePathRaw: string | undefined = body.answer_file_path;
+  const answerFileNameRaw: string | undefined = body.answer_file_name;
   const durationMinutes = Number(body.duration_minutes ?? 90);
-  if (!filePath || !fileName) {
+  if (!filePathRaw || !fileNameRaw) {
     return NextResponse.json({ error: "Thiếu file đề thi" }, { status: 400 });
   }
-  if (!answerFilePath || !answerFileName) {
+  if (!answerFilePathRaw || !answerFileNameRaw) {
     return NextResponse.json({ error: "Thiếu file đáp án — cần upload cả đề và đáp án" }, { status: 400 });
   }
+  // Gán lại sang biến `string` thường (không phải `string | undefined`) sau khi đã kiểm tra
+  // ở trên — TS không giữ được narrowing của biến ngoài khi dùng trong closure khai báo bên
+  // dưới (processExamFile/processAnswerKeyFile), nên cần tách biến tường minh thế này.
+  const filePath: string = filePathRaw;
+  const fileName: string = fileNameRaw;
+  const answerFilePath: string = answerFilePathRaw;
+  const answerFileName: string = answerFileNameRaw;
 
   const admin = createAdminClient();
   const tmpPaths = [filePath, answerFilePath];
@@ -81,110 +88,134 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: `Lỗi tải file đã upload: ${message}` }, { status: 500 });
   }
 
-  let extracted;
-  let sourceBranch: string;
-  let localImages: Map<string, Buffer> | null = null;
   const warnings: string[] = [];
-  // Giữ lại bản PDF đã convert (nếu có) để dùng làm file xem trước đối chiếu bên phải màn
-  // hình duyệt đề — xem khối "Lưu lại file đề gốc" bên dưới và OriginalFileViewer.tsx.
-  let previewPdfBuffer: Buffer | null = null;
 
-  try {
-    if (ext === "docx") {
-      sourceBranch = await detectDocxBranch(buffer);
-      if (sourceBranch === "LEGACY_OLE_IMAGE") {
-        // Công thức MathType/WMF cũ — 2 cách tự giải mã WMF trực tiếp trong Node đều thất
-        // bại trên Vercel (binary native lỗi, rồi thiếu font khi render SVG). Thay vào đó
-        // convert cả file sang PDF qua CloudConvert (chạy LibreOffice thật trên server họ,
-        // render công thức đúng như Word hiển thị), rồi đi qua pipeline PDF đã kiểm chứng.
-        try {
-          const pdfBuffer = await convertToPdf(buffer, fileName);
-          previewPdfBuffer = pdfBuffer;
-          const { extracted: pdfExtracted, images } = await extractPdfPages(pdfBuffer, warnings);
-          localImages = images;
-          extracted = normalizeExtractedExam({ ...pdfExtracted, source_branch: "PDF_IMAGE_ONLY" });
-          sourceBranch = "PDF_IMAGE_ONLY";
-        } catch (e) {
-          const message = e instanceof Error ? e.message : String(e);
-          warnings.push(`Không convert được sang PDF để đọc công thức MathType cũ (${message}) — dùng lại cách cũ, các công thức sẽ đánh dấu [CT?N] cần giáo viên tự nhập.`);
+  if (!IMAGE_EXTS.has(ext) && ext !== "pdf" && ext !== "docx") {
+    await cleanupTmp();
+    return NextResponse.json({ error: "File đề thi chỉ hỗ trợ .docx, .pdf hoặc ảnh (.jpg/.png)" }, { status: 400 });
+  }
+  if (!IMAGE_EXTS.has(answerExt) && answerExt !== "pdf" && answerExt !== "docx") {
+    await cleanupTmp();
+    return NextResponse.json({ error: "File đáp án chỉ hỗ trợ .docx, .pdf hoặc ảnh (.jpg/.png)" }, { status: 400 });
+  }
+
+  /**
+   * Xử lý file đề và file đáp án ĐỘC LẬP, chạy SONG SONG bằng Promise.all thay vì tuần tự
+   * — trước đây xử lý nối tiếp 2 file (đề xong mới tới đáp án) có lúc cộng dồn tới >190s cho
+   * 1 đề 22 câu có công thức MathType cũ, sát ngưỡng maxDuration=280s; khi Gemini chậm hơn
+   * bình thường (quan sát thực tế: lỗi RECITATION phải retry) tổng thời gian có thể VƯỢT
+   * maxDuration, khiến Vercel tự cắt request và trả về trang lỗi HTML (không phải JSON) —
+   * đây chính là nguồn gốc lỗi "Unexpected token... is not valid JSON" khi xử lý quá lâu
+   * (khác với lỗi JSON do vượt body size đã sửa trước đó). Chạy song song giúp tổng thời
+   * gian gần bằng thời gian của file CHẬM HƠN thay vì tổng cả 2, giảm đáng kể rủi ro timeout.
+   */
+  async function processExamFile(): Promise<{
+    extracted: ReturnType<typeof normalizeExtractedExam>;
+    localImages: Map<string, Buffer> | null;
+    previewPdfBuffer: Buffer | null;
+  }> {
+    let extracted: ReturnType<typeof normalizeExtractedExam>;
+    let sourceBranch: string;
+    let localImages: Map<string, Buffer> | null = null;
+    let previewPdfBuffer: Buffer | null = null;
+
+    try {
+      if (ext === "docx") {
+        sourceBranch = await detectDocxBranch(buffer);
+        if (sourceBranch === "LEGACY_OLE_IMAGE") {
+          try {
+            const pdfBuffer = await convertToPdf(buffer, fileName);
+            previewPdfBuffer = pdfBuffer;
+            const { extracted: pdfExtracted, images } = await extractPdfPages(pdfBuffer, warnings);
+            localImages = images;
+            extracted = normalizeExtractedExam({ ...pdfExtracted, source_branch: "PDF_IMAGE_ONLY" });
+            sourceBranch = "PDF_IMAGE_ONLY";
+          } catch (e) {
+            const message = e instanceof Error ? e.message : String(e);
+            warnings.push(`Không convert được sang PDF để đọc công thức MathType cũ (${message}) — dùng lại cách cũ, các công thức sẽ đánh dấu [CT?N] cần giáo viên tự nhập.`);
+            const result = await extractDocx(buffer);
+            localImages = result.images;
+            warnings.push(...result.warnings);
+            const structured = await structureExamText(result.text, warnings);
+            extracted = normalizeExtractedExam({ ...structured, source_branch: sourceBranch });
+          }
+        } else {
           const result = await extractDocx(buffer);
           localImages = result.images;
           warnings.push(...result.warnings);
           const structured = await structureExamText(result.text, warnings);
           extracted = normalizeExtractedExam({ ...structured, source_branch: sourceBranch });
         }
-      } else {
-        const result = await extractDocx(buffer);
-        localImages = result.images;
-        warnings.push(...result.warnings);
-        const structured = await structureExamText(result.text, warnings);
-        extracted = normalizeExtractedExam({ ...structured, source_branch: sourceBranch });
-      }
-      if (!previewPdfBuffer) {
-        // Chưa có bản PDF nào (nhánh OMML_NATIVE/NO_MATH_DETECTED không cần convert để đọc
-        // nội dung) — convert thêm 1 lần CHỈ để làm file xem trước đối chiếu, không chặn cả
-        // lần upload nếu lỗi (giáo viên vẫn tải file .docx gốc về xem được như trước).
-        try {
-          previewPdfBuffer = await convertToPdf(buffer, fileName);
-        } catch {
-          // không có bản xem trước PDF — OriginalFileViewer sẽ chỉ hiện link tải file .docx
+        if (!previewPdfBuffer) {
+          try {
+            previewPdfBuffer = await convertToPdf(buffer, fileName);
+          } catch {
+            // không có bản xem trước PDF — OriginalFileViewer sẽ chỉ hiện link tải file .docx
+          }
         }
+      } else if (ext === "pdf") {
+        const { extracted: pdfExtracted, images } = await extractPdfPages(buffer, warnings);
+        localImages = images;
+        extracted = normalizeExtractedExam({ ...pdfExtracted, source_branch: "PDF_IMAGE_ONLY" });
+      } else {
+        const { extracted: imgExtracted, images } = await extractExamFromImage(buffer, warnings);
+        localImages = images;
+        extracted = normalizeExtractedExam({ ...imgExtracted, source_branch: "PDF_IMAGE_ONLY" });
       }
-    } else if (ext === "pdf") {
-      sourceBranch = "PDF_IMAGE_ONLY";
-      const { extracted: pdfExtracted, images } = await extractPdfPages(buffer, warnings);
-      localImages = images;
-      extracted = normalizeExtractedExam({ ...pdfExtracted, source_branch: sourceBranch });
-    } else if (IMAGE_EXTS.has(ext)) {
-      sourceBranch = "PDF_IMAGE_ONLY";
-      const { extracted: imgExtracted, images } = await extractExamFromImage(buffer, warnings);
-      localImages = images;
-      extracted = normalizeExtractedExam({ ...imgExtracted, source_branch: sourceBranch });
-    } else {
-      await cleanupTmp();
-      return NextResponse.json({ error: "File đề thi chỉ hỗ trợ .docx, .pdf hoặc ảnh (.jpg/.png)" }, { status: 400 });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      throw new Error(`Lỗi xử lý file đề thi: ${message}`);
     }
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    await cleanupTmp();
-    return NextResponse.json({ error: `Lỗi xử lý file đề thi: ${message}` }, { status: 500 });
+
+    return { extracted, localImages, previewPdfBuffer };
   }
 
-  try {
-    let answerKey;
-    if (answerExt === "docx") {
-      const answerBranch = await detectDocxBranch(answerBuffer);
-      if (answerBranch === "LEGACY_OLE_IMAGE") {
-        try {
-          const pdfBuffer = await convertToPdf(answerBuffer, answerFileName);
-          answerKey = await extractAnswerKeyFromPdf(pdfBuffer, warnings);
-        } catch (e) {
-          const message = e instanceof Error ? e.message : String(e);
-          warnings.push(`Không convert được file đáp án sang PDF (${message}) — thử đọc trực tiếp, có thể thiếu công thức.`);
+  async function processAnswerKeyFile() {
+    try {
+      let answerKey;
+      if (answerExt === "docx") {
+        const answerBranch = await detectDocxBranch(answerBuffer);
+        if (answerBranch === "LEGACY_OLE_IMAGE") {
+          try {
+            const pdfBuffer = await convertToPdf(answerBuffer, answerFileName);
+            answerKey = await extractAnswerKeyFromPdf(pdfBuffer, warnings);
+          } catch (e) {
+            const message = e instanceof Error ? e.message : String(e);
+            warnings.push(`Không convert được file đáp án sang PDF (${message}) — thử đọc trực tiếp, có thể thiếu công thức.`);
+            const result = await extractDocx(answerBuffer);
+            answerKey = await extractAnswerKeyFromText(result.text, warnings);
+          }
+        } else {
           const result = await extractDocx(answerBuffer);
           answerKey = await extractAnswerKeyFromText(result.text, warnings);
         }
+      } else if (answerExt === "pdf") {
+        answerKey = await extractAnswerKeyFromPdf(answerBuffer, warnings);
       } else {
-        const result = await extractDocx(answerBuffer);
-        answerKey = await extractAnswerKeyFromText(result.text, warnings);
+        answerKey = await extractAnswerKeyFromImage(answerBuffer.toString("base64"), `image/${answerExt === "jpg" ? "jpeg" : answerExt}`, warnings);
       }
-    } else if (answerExt === "pdf") {
-      answerKey = await extractAnswerKeyFromPdf(answerBuffer, warnings);
-    } else if (IMAGE_EXTS.has(answerExt)) {
-      answerKey = await extractAnswerKeyFromImage(answerBuffer.toString("base64"), `image/${answerExt === "jpg" ? "jpeg" : answerExt}`, warnings);
-    } else {
-      await cleanupTmp();
-      return NextResponse.json({ error: "File đáp án chỉ hỗ trợ .docx, .pdf hoặc ảnh (.jpg/.png)" }, { status: 400 });
+      if (answerKey.length === 0) {
+        warnings.push("Không đọc được đáp án nào từ file đáp án — giáo viên cần tự điền đáp án ở bước duyệt.");
+      }
+      return answerKey;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      throw new Error(`Lỗi xử lý file đáp án: ${message}`);
     }
-    if (answerKey.length === 0) {
-      warnings.push("Không đọc được đáp án nào từ file đáp án — giáo viên cần tự điền đáp án ở bước duyệt.");
-    }
-    extracted = { ...extracted, questions: mergeAnswerKeyIntoQuestions(extracted.questions, answerKey) };
+  }
+
+  let examResult: Awaited<ReturnType<typeof processExamFile>>;
+  let answerKey: Awaited<ReturnType<typeof processAnswerKeyFile>>;
+  try {
+    [examResult, answerKey] = await Promise.all([processExamFile(), processAnswerKeyFile()]);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     await cleanupTmp();
-    return NextResponse.json({ error: `Lỗi xử lý file đáp án: ${message}` }, { status: 500 });
+    return NextResponse.json({ error: message }, { status: 500 });
   }
+
+  const { localImages, previewPdfBuffer } = examResult;
+  const extracted = { ...examResult.extracted, questions: mergeAnswerKeyIntoQuestions(examResult.extracted.questions, answerKey) };
 
   const { data: exam, error: examError } = await supabase
     .from("exams")

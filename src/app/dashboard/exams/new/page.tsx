@@ -133,7 +133,22 @@ export default function NewExamPage() {
           duration_minutes: duration,
         }),
       });
-      const data = await res.json();
+      // Nếu server timeout (Vercel vượt maxDuration) hoặc gặp lỗi hạ tầng, phản hồi có thể
+      // là trang lỗi HTML/text thay vì JSON — tránh để JSON.parse ném lỗi "Unexpected
+      // token..." khó hiểu, hiện thông báo rõ ràng thay thế.
+      const rawText = await res.text();
+      let data: { error?: string; warnings?: string[]; exam_id?: string } = {};
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        setError(
+          res.status === 504 || !res.ok
+            ? "Xử lý đề thi mất quá nhiều thời gian hoặc máy chủ gặp sự cố — thường do đề có nhiều công thức/trang. Vui lòng thử lại; nếu vẫn lỗi, thử tách đề thành phần nhỏ hơn hoặc liên hệ hỗ trợ."
+            : "Phản hồi từ máy chủ không hợp lệ — vui lòng thử lại."
+        );
+        setBusy(false);
+        return;
+      }
 
       if (!res.ok) {
         setError(data.error ?? "Có lỗi xảy ra khi xử lý file");
