@@ -55,10 +55,21 @@ export function ResizableSplitView({
       </div>
       <div
         onPointerDown={startDrag}
-        className="group relative mx-1 w-1.5 shrink-0 cursor-col-resize rounded bg-slate-200 hover:bg-slate-400 active:bg-slate-500"
-        title="Kéo để thu/giãn"
+        className="group relative mx-1 w-2.5 shrink-0 cursor-col-resize select-none rounded bg-slate-100 hover:bg-slate-300 active:bg-slate-400"
+        title="Kéo sang trái/phải để thu/giãn khung"
       >
-        <div className="absolute left-1/2 top-1/2 h-10 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded bg-slate-400 group-hover:bg-slate-500" />
+        <div className="pointer-events-none absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 gap-0.5">
+          <div className="flex flex-col gap-1">
+            <span className="h-1 w-1 rounded-full bg-slate-400 group-hover:bg-slate-600" />
+            <span className="h-1 w-1 rounded-full bg-slate-400 group-hover:bg-slate-600" />
+            <span className="h-1 w-1 rounded-full bg-slate-400 group-hover:bg-slate-600" />
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="h-1 w-1 rounded-full bg-slate-400 group-hover:bg-slate-600" />
+            <span className="h-1 w-1 rounded-full bg-slate-400 group-hover:bg-slate-600" />
+            <span className="h-1 w-1 rounded-full bg-slate-400 group-hover:bg-slate-600" />
+          </div>
+        </div>
       </div>
       <div
         className="min-w-0 shrink-0 overflow-y-auto pl-3"

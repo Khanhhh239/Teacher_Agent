@@ -39,7 +39,8 @@ export default async function DashboardPage() {
               <Link href={`/dashboard/exams/${exam.id}`} className="min-w-0 flex-1">
                 <p className="font-medium">{exam.title}</p>
                 <p className="text-sm text-slate-500">
-                  {exam.subject || "Chưa rõ môn"} · {exam.duration_minutes} phút
+                  {exam.subject || "Chưa rõ môn"} · {exam.duration_minutes} phút · Tạo lúc{" "}
+                  {new Date(exam.created_at).toLocaleString("vi-VN")}
                 </p>
               </Link>
               <div className="flex items-center gap-2">

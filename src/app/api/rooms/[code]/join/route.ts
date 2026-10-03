@@ -10,6 +10,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ cod
   if (!student_name || typeof student_name !== "string") {
     return NextResponse.json({ error: "Thiếu tên học sinh" }, { status: 400 });
   }
+  if (!student_code || typeof student_code !== "string" || !student_code.trim()) {
+    return NextResponse.json({ error: "Thiếu số báo danh — đây là trường bắt buộc" }, { status: 400 });
+  }
 
   const supabase = createAdminClient();
 

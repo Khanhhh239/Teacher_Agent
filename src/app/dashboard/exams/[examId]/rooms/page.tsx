@@ -37,6 +37,16 @@ export default async function RoomsPage({ params }: { params: Promise<{ examId: 
               <p className="font-mono text-xl font-bold tracking-widest">{room.code}</p>
               <p className="text-xs text-slate-500">
                 Tạo lúc {new Date(room.created_at).toLocaleString("vi-VN")}
+                {room.opens_at || room.closes_at ? (
+                  <>
+                    {" "}
+                    · Mở:{" "}
+                    {room.opens_at ? new Date(room.opens_at).toLocaleString("vi-VN") : "ngay"} →{" "}
+                    {room.closes_at ? new Date(room.closes_at).toLocaleString("vi-VN") : "không giới hạn"}
+                  </>
+                ) : (
+                  " · Không giới hạn khung giờ vào thi"
+                )}
               </p>
             </div>
             <div className="flex items-center gap-3">

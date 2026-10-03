@@ -16,6 +16,9 @@ export function CreateRoomForm({ examId }: { examId: string }) {
   const [requireFullscreen, setRequireFullscreen] = useState(true);
   const [maxAttempts, setMaxAttempts] = useState(1);
   const [violationKickLimit, setViolationKickLimit] = useState(1);
+  const [limitWindow, setLimitWindow] = useState(false);
+  const [opensAt, setOpensAt] = useState("");
+  const [closesAt, setClosesAt] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,6 +32,8 @@ export function CreateRoomForm({ examId }: { examId: string }) {
       require_fullscreen: requireFullscreen,
       max_attempts: Math.max(1, maxAttempts),
       violation_kick_limit: Math.max(1, violationKickLimit),
+      opens_at: limitWindow && opensAt ? new Date(opensAt).toISOString() : null,
+      closes_at: limitWindow && closesAt ? new Date(closesAt).toISOString() : null,
       is_active: true,
     });
     setBusy(false);
@@ -49,6 +54,33 @@ export function CreateRoomForm({ examId }: { examId: string }) {
         />
         Bắt buộc toàn màn hình + ghi log vi phạm (khuyến nghị)
       </label>
+      <label className="mb-3 flex items-center gap-2 text-sm">
+        <input type="checkbox" checked={limitWindow} onChange={(e) => setLimitWindow(e.target.checked)} />
+        Giới hạn khung giờ được VÀO phòng thi (khác với thời lượng làm bài của đề — học sinh có
+        thể cần thời gian chuẩn bị trước khi bắt đầu tính giờ)
+      </label>
+      {limitWindow && (
+        <div className="mb-3 flex flex-wrap gap-4">
+          <label className="flex flex-col gap-1 text-sm">
+            Mở phòng từ
+            <input
+              type="datetime-local"
+              value={opensAt}
+              onChange={(e) => setOpensAt(e.target.value)}
+              className="rounded border px-2 py-1"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            Đóng phòng lúc
+            <input
+              type="datetime-local"
+              value={closesAt}
+              onChange={(e) => setClosesAt(e.target.value)}
+              className="rounded border px-2 py-1"
+            />
+          </label>
+        </div>
+      )}
       <div className="mb-3 flex flex-wrap gap-4">
         <label className="flex items-center gap-2 text-sm">
           Số lần làm bài tối đa

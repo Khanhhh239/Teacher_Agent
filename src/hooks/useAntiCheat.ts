@@ -13,7 +13,8 @@ export function useAntiCheat(
   sessionId: string,
   enabled: boolean,
   requireFullscreen: boolean,
-  onKicked?: () => void
+  onKicked?: () => void,
+  onViolation?: (type: ViolationType, count: number, limit: number) => void
 ) {
   const violationCountRef = useRef(0);
 
@@ -31,6 +32,7 @@ export function useAntiCheat(
         .then((r) => r.json())
         .then((d) => {
           if (d?.kicked) onKicked?.();
+          else onViolation?.(type, d?.count ?? violationCountRef.current, d?.limit ?? 1);
         })
         .catch(() => {});
     }
@@ -95,5 +97,5 @@ export function useAntiCheat(
       document.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
-  }, [sessionId, enabled, requireFullscreen, onKicked]);
+  }, [sessionId, enabled, requireFullscreen, onKicked, onViolation]);
 }

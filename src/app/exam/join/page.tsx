@@ -58,12 +58,14 @@ export default function JoinExamPage() {
         </div>
 
         <div>
-          <label className="mb-1 block text-sm font-medium">Số báo danh (nếu có)</label>
+          <label className="mb-1 block text-sm font-medium">Số báo danh (giáo viên cấp)</label>
           <input
+            required
             value={studentCode}
             onChange={(e) => setStudentCode(e.target.value)}
             className="w-full rounded-md border px-3 py-2 text-sm"
           />
+          <p className="mt-1 text-xs text-slate-500">Bắt buộc — cần nhập lại đúng số này khi nộp bài.</p>
         </div>
 
         {error && <p className="text-sm text-red-600">{error}</p>}

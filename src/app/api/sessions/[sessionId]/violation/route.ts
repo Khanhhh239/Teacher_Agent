@@ -31,5 +31,5 @@ export async function POST(request: Request, { params }: { params: Promise<{ ses
     })
     .eq("id", sessionId);
 
-  return NextResponse.json({ ok: true, kicked: shouldKick });
+  return NextResponse.json({ ok: true, kicked: shouldKick, count: newCount, limit: kickLimit });
 }
