@@ -102,13 +102,40 @@ export function segmentFromLines(pages: PageLines[]): SegmentResult {
 
   const questionAnchors = boundaries.filter((b) => b.kind === "q");
   if (questionAnchors.length === 0) return { ok: false, reason: "Không tìm thấy nhãn 'Câu N' trong lớp chữ" };
-  for (let i = 0; i < questionAnchors.length; i++) {
-    if (questionAnchors[i].number !== i + 1) {
+
+  // Kiểm tra liên tục theo TỪNG NHÓM giữa 2 nhãn "PHẦN" (thay vì toàn bài): đề thi có thể đánh
+  // số liên tục xuyên suốt (1,2,3...12,13,14...) HOẶC đánh số lại từ 1 ở mỗi Phần (chuẩn THPT
+  // 2025 phổ biến: "Phần II. ... thí sinh trả lời từ câu 1 đến câu 4") — cả hai đều hợp lệ.
+  const groups: Boundary[][] = [];
+  let currentGroup: Boundary[] = [];
+  for (const b of boundaries) {
+    if (b.kind === "part") {
+      if (currentGroup.length) groups.push(currentGroup);
+      currentGroup = [];
+      continue;
+    }
+    currentGroup.push(b);
+  }
+  if (currentGroup.length) groups.push(currentGroup);
+
+  let prevGroupLast = 0;
+  for (const group of groups) {
+    const expectedStarts = prevGroupLast === 0 ? [1] : [1, prevGroupLast + 1];
+    if (!expectedStarts.includes(group[0].number)) {
       return {
         ok: false,
-        reason: `Số thứ tự câu không liên tục (vị trí ${i + 1} đọc ra "Câu ${questionAnchors[i].number}") — có thể bố cục hai cột hoặc thiếu nhãn`,
+        reason: `Số thứ tự câu không hợp lệ (gặp "Câu ${group[0].number}" ngay sau nhãn Phần, trong khi cần bắt đầu từ Câu 1 hoặc tiếp nối Câu ${prevGroupLast + 1}) — có thể bố cục hai cột hoặc thiếu nhãn`,
       };
     }
+    for (let i = 1; i < group.length; i++) {
+      if (group[i].number !== group[i - 1].number + 1) {
+        return {
+          ok: false,
+          reason: `Số thứ tự câu không liên tục (gặp "Câu ${group[i].number}" ngay sau "Câu ${group[i - 1].number}") — có thể bố cục hai cột hoặc thiếu nhãn`,
+        };
+      }
+    }
+    prevGroupLast = group[group.length - 1].number;
   }
 
   const clamp = (v: number, h: number) => Math.max(0, Math.min(h, v));

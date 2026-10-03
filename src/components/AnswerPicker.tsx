@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import type { QuestionType, StudentAnswerPayload } from "@/types/exam";
 
 /**
@@ -53,7 +54,7 @@ function Btn({
   );
 }
 
-export function AnswerPicker({
+function AnswerPickerImpl({
   number,
   type,
   optionKeys,
@@ -153,3 +154,20 @@ export function AnswerPicker({
     </div>
   );
 }
+
+// Danh sách câu hỏi re-render toàn bộ parent mỗi lần học sinh bấm 1 đáp án (setState ở cha) —
+// memo hoá để chỉ MỘT hàng vừa đổi `value` mới tính lại, không phải cả 20-50 câu. `onChange`
+// cố tình KHÔNG so sánh vì nó là closure mới mỗi render nhưng hành vi không đổi.
+export const AnswerPicker = memo(AnswerPickerImpl, (prev, next) => {
+  return (
+    prev.number === next.number &&
+    prev.type === next.type &&
+    prev.optionKeys === next.optionKeys &&
+    prev.subKeys === next.subKeys &&
+    prev.value === next.value &&
+    prev.showCorrectness === next.showCorrectness &&
+    prev.correctAnswer === next.correctAnswer &&
+    prev.correctStatements === next.correctStatements &&
+    prev.correctText === next.correctText
+  );
+});

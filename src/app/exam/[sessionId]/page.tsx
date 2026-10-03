@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useCallback, useEffect, useRef, useState } from "react";
+import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { QuestionAnswerSplit, type SplitQuestion } from "@/components/QuestionAnswerSplit";
 import { useAntiCheat } from "@/hooks/useAntiCheat";
@@ -145,6 +145,23 @@ export default function TakeExamPage({ params }: { params: Promise<{ sessionId: 
     doSubmit();
   }
 
+  // useMemo phải gọi vô điều kiện (Rules of Hooks) nên đặt trước các early-return bên dưới —
+  // tránh build lại mảng/object mới mỗi lần render (mỗi lần bấm 1 đáp án) để AnswerPicker/
+  // QuestionImageCard đã memo hoá thực sự nhận được props ổn định và không bị tính lại oan.
+  const splitQuestions: SplitQuestion[] = useMemo(
+    () =>
+      (data?.questions ?? []).map((q, idx) => ({
+        id: q.id,
+        number: idx + 1,
+        part_label: q.part_label,
+        source_crop_url: q.source_crop_url,
+        type: q.type,
+        optionKeys: q.options.map((o) => o.key),
+        subKeys: q.sub_statements.map((s) => s.key),
+      })),
+    [data?.questions]
+  );
+
   if (!data) {
     return <div className="flex min-h-screen items-center justify-center">Đang tải đề thi...</div>;
   }
@@ -166,16 +183,6 @@ export default function TakeExamPage({ params }: { params: Promise<{ sessionId: 
       </div>
     );
   }
-
-  const splitQuestions: SplitQuestion[] = data.questions.map((q, idx) => ({
-    id: q.id,
-    number: idx + 1,
-    part_label: q.part_label,
-    source_crop_url: q.source_crop_url,
-    type: q.type,
-    optionKeys: q.options.map((o) => o.key),
-    subKeys: q.sub_statements.map((s) => s.key),
-  }));
 
   return (
     <div className="flex h-screen flex-col bg-slate-50">
