@@ -514,7 +514,20 @@ export interface AnswerKeyEntry {
   value?: string | null;
 }
 
-const ANSWER_KEY_PROMPT = `Bạn là trợ lý đọc đáp án đề thi tiếng Việt. Nội dung/ảnh đính kèm là FILE ĐÁP ÁN (không phải đề thi) — có thể là bảng đáp án ngắn gọn (vd "1-A 2-C 3-D...", hoặc bảng Đúng/Sai từng ý a/b/c/d) hoặc lời giải chi tiết từng câu. Đọc và trả về DUY NHẤT 1 JSON theo schema:
+/**
+ * `pageQuestionHint`: với file đáp án PDF nhiều trang, mỗi trang được gọi Gemini RIÊNG LẺ
+ * (không có ngữ cảnh trang khác — xem buildAnswerKeyPageHints). Khi lời giải 1 câu dài tràn
+ * qua 2-3 trang, trang sau chỉ còn thấy phần "Lời giải" tiếp theo mà KHÔNG còn thấy lại nhãn
+ * "Câu N:" (đã in ở trang trước đó) — model không có cách nào tự biết đúng số câu, nên hay
+ * đoán nhầm (đã kiểm chứng thực tế: đoán thành "Câu 1" dù đang đọc lời giải của Câu 4 Phần II).
+ * Thay vì để model tự đoán, ta TÍNH TRƯỚC bằng lớp chữ PDF (code thuần, không AI) đúng (các)
+ * số thứ tự toàn cục mà trang này CHẮC CHẮN thuộc về, rồi ép model chỉ được dùng đúng số đó.
+ */
+function answerKeyPrompt(pageQuestionHint?: string): string {
+  const hintBlock = pageQuestionHint
+    ? `\n\nGỢI Ý BẮT BUỘC: trang này chỉ chứa nội dung của (các) câu theo ĐÚNG số thứ tự toàn cục sau, theo thứ tự xuất hiện trên trang: ${pageQuestionHint}. Nếu đọc được đáp án nào trên trang, PHẢI dùng "question_number" lấy từ đúng danh sách này (không tự đặt số khác, kể cả khi trang không còn thấy nhãn "Câu N:" vì lời giải tràn từ trang trước sang) — nếu trang không có đáp án nào khớp các câu trên, trả answers rỗng.`
+    : "";
+  return `Bạn là trợ lý đọc đáp án đề thi tiếng Việt. Nội dung/ảnh đính kèm là FILE ĐÁP ÁN (không phải đề thi) — có thể là bảng đáp án ngắn gọn (vd "1-A 2-C 3-D...", hoặc bảng Đúng/Sai từng ý a/b/c/d) hoặc lời giải chi tiết từng câu. Đọc và trả về DUY NHẤT 1 JSON theo schema:
 {
   "answers": [
     {"question_number": 1, "type": "multiple_choice", "correct_answer": "A"},
@@ -528,7 +541,8 @@ Quy tắc:
 - Đúng/Sai 4 ý a/b/c/d: type "true_false_group", "sub_statements" PHẢI đủ 4 phần tử đúng thứ tự a,b,c,d.
 - Tự luận/điền số: type "short_answer", "value" là đáp án dạng chuỗi (giữ nguyên định dạng số, vd "12.5" hoặc "1234").
 - Nếu không đọc được đáp án của một câu nào đó, bỏ qua câu đó hoàn toàn (không bịa đáp án).
-Chỉ trả JSON hợp lệ, không markdown, không code fence.`;
+Chỉ trả JSON hợp lệ, không markdown, không code fence.${hintBlock}`;
+}
 
 function parseAnswerKeyResponse(text: string): AnswerKeyEntry[] {
   const data = extractJson(text) as { answers?: AnswerKeyEntry[] };
@@ -537,7 +551,7 @@ function parseAnswerKeyResponse(text: string): AnswerKeyEntry[] {
 
 /** Đọc đáp án từ nội dung text thuần (file đáp án dạng .docx) — 1 lần gọi Gemini duy nhất. */
 export async function extractAnswerKeyFromText(rawText: string, warnings?: string[]): Promise<AnswerKeyEntry[]> {
-  const prompt = ANSWER_KEY_PROMPT + "\n\nNội dung file đáp án:\n---\n" + rawText + "\n---";
+  const prompt = answerKeyPrompt() + "\n\nNội dung file đáp án:\n---\n" + rawText + "\n---";
   return parseAnswerKeyResponse(await callGeminiText(prompt, warnings));
 }
 
@@ -551,7 +565,8 @@ export async function extractAnswerKeyFromImage(
   mimeType = "image/png",
   warnings?: string[],
   model: string = GEMINI_MODEL_VISION,
-  deadline?: number
+  deadline?: number,
+  questionNumberHint?: string
 ): Promise<AnswerKeyEntry[]> {
   // Giãn nhịp theo hạn mức free từng model để không dồn dập vào cùng lúc với phần đọc đề.
   // Nếu lượt gọi sẽ rơi sau deadline, bỏ qua luôn thay vì chờ rồi vẫn bị Vercel cắt request.
@@ -561,7 +576,7 @@ export async function extractAnswerKeyFromImage(
     if (warnings && !warnings.includes(msg)) warnings.push(msg);
     return [];
   }
-  return parseAnswerKeyResponse(await callGeminiWithImage(imageBase64, ANSWER_KEY_PROMPT, mimeType, warnings, 0, model));
+  return parseAnswerKeyResponse(await callGeminiWithImage(imageBase64, answerKeyPrompt(questionNumberHint), mimeType, warnings, 0, model));
 }
 
 /** File đáp án dạng PDF nhiều trang — render từng trang rồi gọi Gemini vision riêng cho mỗi
@@ -575,15 +590,16 @@ async function extractAnswerKeyFromPageWithSplit(
   warnings: string[] | undefined,
   depth: number,
   model: string = GEMINI_MODEL_VISION,
-  deadline?: number
+  deadline?: number,
+  questionNumberHint?: string
 ): Promise<AnswerKeyEntry[]> {
   try {
-    return await extractAnswerKeyFromImage(pageBuffer.toString("base64"), "image/png", warnings, model, deadline);
+    return await extractAnswerKeyFromImage(pageBuffer.toString("base64"), "image/png", warnings, model, deadline, questionNumberHint);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     if (!message.includes("RECITATION")) throw e;
     if (depth >= 1) {
-      const fallbackText = await callVisionFallback(pageBuffer.toString("base64"), ANSWER_KEY_PROMPT, warnings);
+      const fallbackText = await callVisionFallback(pageBuffer.toString("base64"), answerKeyPrompt(questionNumberHint), warnings);
       if (fallbackText) {
         try {
           return parseAnswerKeyResponse(fallbackText);
@@ -606,8 +622,8 @@ async function extractAnswerKeyFromPageWithSplit(
     const topHalf = await sharp(pageBuffer).extract({ left: 0, top: 0, width, height: topHeight }).png().toBuffer();
     const bottomHalf = await sharp(pageBuffer).extract({ left: 0, top: bottomTop, width, height: height - bottomTop }).png().toBuffer();
     const [topEntries, bottomEntries] = await Promise.all([
-      extractAnswerKeyFromPageWithSplit(topHalf, `${pageLabel} (nửa trên)`, warnings, depth + 1, model, deadline),
-      extractAnswerKeyFromPageWithSplit(bottomHalf, `${pageLabel} (nửa dưới)`, warnings, depth + 1, model, deadline),
+      extractAnswerKeyFromPageWithSplit(topHalf, `${pageLabel} (nửa trên)`, warnings, depth + 1, model, deadline, questionNumberHint),
+      extractAnswerKeyFromPageWithSplit(bottomHalf, `${pageLabel} (nửa dưới)`, warnings, depth + 1, model, deadline, questionNumberHint),
     ]);
     return [...topEntries, ...bottomEntries];
   }
@@ -626,21 +642,40 @@ async function extractAnswerKeyFromPageWithSplit(
  * Nếu file đáp án không có lớp chữ hợp lệ (ảnh chụp, hoặc không phân đoạn được) thì bỏ qua bước
  * này và giữ nguyên hành vi cũ (tin số AI trả về).
  */
-async function buildAnswerKeyPageNumberMaps(buffer: Buffer): Promise<Map<number, number[]>[] | null> {
+interface AnswerKeyPageInfo {
+  /** Chỉ các câu có NHÃN "Câu N:" bắt đầu trên trang này — khoá theo số cục bộ AI nhìn thấy. */
+  localToGlobal: Map<number, number[]>;
+  /** TẤT CẢ câu có bất kỳ phần nội dung/lời giải nào chạm tới trang này, kể cả khi lời giải
+   * tràn từ trang trước sang (không còn thấy nhãn) — dùng làm gợi ý bắt buộc cho AI. */
+  hint: string | undefined;
+}
+
+async function buildAnswerKeyPageInfo(buffer: Buffer): Promise<AnswerKeyPageInfo[] | null> {
   try {
     const { extractPageLines } = await import("./pdfTextLayer");
     const { segmentFromLines } = await import("./textLayerSegment");
     const pageLines = await extractPageLines(buffer);
     const seg = segmentFromLines(pageLines);
     if (!seg.ok) return null;
-    const perPage: Map<number, number[]>[] = Array.from({ length: pageLines.length }, () => new Map());
+    const perPage: AnswerKeyPageInfo[] = Array.from({ length: pageLines.length }, () => ({
+      localToGlobal: new Map(),
+      hint: undefined,
+    }));
+    const hintNumbers: number[][] = Array.from({ length: pageLines.length }, () => []);
     seg.blocks.forEach((block, idx) => {
-      const page = block.segments[0]?.page;
-      if (page === undefined || !perPage[page]) return;
       const globalNumber = idx + 1;
-      const queue = perPage[page].get(block.number) ?? [];
-      queue.push(globalNumber);
-      perPage[page].set(block.number, queue);
+      const labelPage = block.segments[0]?.page;
+      if (labelPage !== undefined && perPage[labelPage]) {
+        const queue = perPage[labelPage].localToGlobal.get(block.number) ?? [];
+        queue.push(globalNumber);
+        perPage[labelPage].localToGlobal.set(block.number, queue);
+      }
+      for (const page of new Set(block.segments.map((s) => s.page))) {
+        if (hintNumbers[page] && !hintNumbers[page].includes(globalNumber)) hintNumbers[page].push(globalNumber);
+      }
+    });
+    hintNumbers.forEach((nums, i) => {
+      if (nums.length > 0) perPage[i].hint = nums.sort((a, b) => a - b).join(", ");
     });
     return perPage;
   } catch {
@@ -672,19 +707,23 @@ export async function extractAnswerKeyFromPdf(
 ): Promise<AnswerKeyEntry[]> {
   const { renderPdfPages } = await import("./pdfRender");
   const pages = renderPdfPages(buffer);
-  const pageNumberMaps = await buildAnswerKeyPageNumberMaps(buffer);
+  const pageInfo = await buildAnswerKeyPageInfo(buffer);
 
   // Gọi TẤT CẢ các trang song song (rateLimiter.waitForSlot tự giãn nhịp an toàn giữa các lệnh
   // gọi đồng thời) thay vì tuần tự từng trang — với file đáp án nhiều trang (lời giải chi tiết),
   // chờ tuần tự từng round-trip mạng dễ làm hết ngân sách thời gian trước khi đọc xong mọi trang
   // (đã gặp thực tế: 15 trang tuần tự chỉ đọc được ~10/22 câu trước khi tới deadline).
   const perPageResults = await Promise.all(
-    pages.map((page, i) => extractAnswerKeyFromPageWithSplit(page, `Trang ${i + 1} (đáp án)`, warnings, 0, opts.model, opts.deadline))
+    pages.map((page, i) =>
+      extractAnswerKeyFromPageWithSplit(page, `Trang ${i + 1} (đáp án)`, warnings, 0, opts.model, opts.deadline, pageInfo?.[i]?.hint)
+    )
   );
 
   const all: AnswerKeyEntry[] = [];
   perPageResults.forEach((entries, i) => {
-    all.push(...remapToGlobalNumbers(entries, pageNumberMaps?.[i]));
+    // Gợi ý trong prompt là cơ chế chính (ép AI dùng đúng số toàn cục); remap theo nhãn là lưới
+    // an toàn thứ hai cho trường hợp AI phớt lờ gợi ý và vẫn trả số cục bộ như cũ.
+    all.push(...remapToGlobalNumbers(entries, pageInfo?.[i]?.localToGlobal));
   });
   return all;
 }
