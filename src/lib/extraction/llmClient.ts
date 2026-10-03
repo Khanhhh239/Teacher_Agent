@@ -550,10 +550,17 @@ export async function extractAnswerKeyFromImage(
   imageBase64: string,
   mimeType = "image/png",
   warnings?: string[],
-  model: string = GEMINI_MODEL_VISION
+  model: string = GEMINI_MODEL_VISION,
+  deadline?: number
 ): Promise<AnswerKeyEntry[]> {
   // Giãn nhịp theo hạn mức free từng model để không dồn dập vào cùng lúc với phần đọc đề.
-  await waitForSlot(model);
+  // Nếu lượt gọi sẽ rơi sau deadline, bỏ qua luôn thay vì chờ rồi vẫn bị Vercel cắt request.
+  const gotSlot = await waitForSlot(model, deadline);
+  if (!gotSlot) {
+    const msg = "Hết thời gian xử lý nên một số trang của file đáp án chưa đọc được — giáo viên tự điền các đáp án còn thiếu (gợi ý: upload ảnh bảng đáp án thay vì file lời giải dài).";
+    if (warnings && !warnings.includes(msg)) warnings.push(msg);
+    return [];
+  }
   return parseAnswerKeyResponse(await callGeminiWithImage(imageBase64, ANSWER_KEY_PROMPT, mimeType, warnings, 0, model));
 }
 
@@ -567,10 +574,11 @@ async function extractAnswerKeyFromPageWithSplit(
   pageLabel: string,
   warnings: string[] | undefined,
   depth: number,
-  model: string = GEMINI_MODEL_VISION
+  model: string = GEMINI_MODEL_VISION,
+  deadline?: number
 ): Promise<AnswerKeyEntry[]> {
   try {
-    return await extractAnswerKeyFromImage(pageBuffer.toString("base64"), "image/png", warnings, model);
+    return await extractAnswerKeyFromImage(pageBuffer.toString("base64"), "image/png", warnings, model, deadline);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     if (!message.includes("RECITATION")) throw e;
@@ -598,11 +606,63 @@ async function extractAnswerKeyFromPageWithSplit(
     const topHalf = await sharp(pageBuffer).extract({ left: 0, top: 0, width, height: topHeight }).png().toBuffer();
     const bottomHalf = await sharp(pageBuffer).extract({ left: 0, top: bottomTop, width, height: height - bottomTop }).png().toBuffer();
     const [topEntries, bottomEntries] = await Promise.all([
-      extractAnswerKeyFromPageWithSplit(topHalf, `${pageLabel} (nửa trên)`, warnings, depth + 1, model),
-      extractAnswerKeyFromPageWithSplit(bottomHalf, `${pageLabel} (nửa dưới)`, warnings, depth + 1, model),
+      extractAnswerKeyFromPageWithSplit(topHalf, `${pageLabel} (nửa trên)`, warnings, depth + 1, model, deadline),
+      extractAnswerKeyFromPageWithSplit(bottomHalf, `${pageLabel} (nửa dưới)`, warnings, depth + 1, model, deadline),
     ]);
     return [...topEntries, ...bottomEntries];
   }
+}
+
+/**
+ * Mỗi trang được gọi Gemini RIÊNG LẺ, không có ngữ cảnh các trang trước — nên khi file đáp án
+ * đánh số lại "Câu 1" ở mỗi Phần (giống hệt file đề, rất phổ biến ở đề THPT 2025), AI KHÔNG
+ * THỂ biết số thứ tự toàn cục thực sự là bao nhiêu (nó chỉ thấy đúng cái số in trên trang đó).
+ * Hậu quả thực tế đã gặp: đáp án câu 1 của Phần III (số cục bộ "1") đè nhầm lên đáp án câu 1
+ * của Phần I trong Map theo question_number, làm sai lệch hàng loạt câu.
+ *
+ * Sửa bằng cách dùng CHÍNH lớp chữ của file đáp án (nếu có, cùng thuật toán phân đoạn với file
+ * đề — xem textLayerSegment.ts) để biết chắc chắn: trang P có những câu nào, số cục bộ bao
+ * nhiêu, thuộc Phần nào → suy ra đúng vị trí toàn cục — hoàn toàn bằng code, không nhờ AI đếm.
+ * Nếu file đáp án không có lớp chữ hợp lệ (ảnh chụp, hoặc không phân đoạn được) thì bỏ qua bước
+ * này và giữ nguyên hành vi cũ (tin số AI trả về).
+ */
+async function buildAnswerKeyPageNumberMaps(buffer: Buffer): Promise<Map<number, number[]>[] | null> {
+  try {
+    const { extractPageLines } = await import("./pdfTextLayer");
+    const { segmentFromLines } = await import("./textLayerSegment");
+    const pageLines = await extractPageLines(buffer);
+    const seg = segmentFromLines(pageLines);
+    if (!seg.ok) return null;
+    const perPage: Map<number, number[]>[] = Array.from({ length: pageLines.length }, () => new Map());
+    seg.blocks.forEach((block, idx) => {
+      const page = block.segments[0]?.page;
+      if (page === undefined || !perPage[page]) return;
+      const globalNumber = idx + 1;
+      const queue = perPage[page].get(block.number) ?? [];
+      queue.push(globalNumber);
+      perPage[page].set(block.number, queue);
+    });
+    return perPage;
+  } catch {
+    return null;
+  }
+}
+
+/** Ánh xạ "question_number" (số cục bộ AI đọc được trên 1 trang) sang số thứ tự toàn cục thật,
+ * dùng thứ tự xuất hiện để phân biệt khi 1 trang có 2 câu trùng số cục bộ (hiếm, lúc Phần mới
+ * bắt đầu giữa trang). Nếu không tìm thấy câu tương ứng trong lớp chữ, giữ nguyên số AI trả về
+ * (an toàn hơn là làm mất hẳn câu trả lời đó). */
+function remapToGlobalNumbers(entries: AnswerKeyEntry[], localToGlobal: Map<number, number[]> | undefined): AnswerKeyEntry[] {
+  if (!localToGlobal) return entries;
+  const consumed = new Map<number, number>();
+  return entries.map((e) => {
+    const queue = localToGlobal.get(e.question_number);
+    if (!queue) return e;
+    const usedCount = consumed.get(e.question_number) ?? 0;
+    consumed.set(e.question_number, usedCount + 1);
+    const globalNumber = queue[usedCount];
+    return globalNumber === undefined ? e : { ...e, question_number: globalNumber };
+  });
 }
 
 export async function extractAnswerKeyFromPdf(
@@ -612,16 +672,20 @@ export async function extractAnswerKeyFromPdf(
 ): Promise<AnswerKeyEntry[]> {
   const { renderPdfPages } = await import("./pdfRender");
   const pages = renderPdfPages(buffer);
+  const pageNumberMaps = await buildAnswerKeyPageNumberMaps(buffer);
+
+  // Gọi TẤT CẢ các trang song song (rateLimiter.waitForSlot tự giãn nhịp an toàn giữa các lệnh
+  // gọi đồng thời) thay vì tuần tự từng trang — với file đáp án nhiều trang (lời giải chi tiết),
+  // chờ tuần tự từng round-trip mạng dễ làm hết ngân sách thời gian trước khi đọc xong mọi trang
+  // (đã gặp thực tế: 15 trang tuần tự chỉ đọc được ~10/22 câu trước khi tới deadline).
+  const perPageResults = await Promise.all(
+    pages.map((page, i) => extractAnswerKeyFromPageWithSplit(page, `Trang ${i + 1} (đáp án)`, warnings, 0, opts.model, opts.deadline))
+  );
+
   const all: AnswerKeyEntry[] = [];
-  for (let i = 0; i < pages.length; i++) {
-    // Quá hạn thời gian của request: dừng đọc tiếp, báo rõ phần còn thiếu thay vì để Vercel cắt request.
-    if (opts.deadline !== undefined && Date.now() > opts.deadline) {
-      warnings?.push(`Hết thời gian xử lý nên chưa đọc đáp án từ trang ${i + 1} trở đi của file đáp án — giáo viên tự điền các đáp án còn thiếu (gợi ý: upload ảnh bảng đáp án thay vì file lời giải dài).`);
-      break;
-    }
-    const entries = await extractAnswerKeyFromPageWithSplit(pages[i], `Trang ${i + 1} (đáp án)`, warnings, 0, opts.model);
-    all.push(...entries);
-  }
+  perPageResults.forEach((entries, i) => {
+    all.push(...remapToGlobalNumbers(entries, pageNumberMaps?.[i]));
+  });
   return all;
 }
 
