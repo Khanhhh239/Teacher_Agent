@@ -20,21 +20,24 @@ export default async function RoomsPage({ params }: { params: Promise<{ examId: 
 
   return (
     <div>
-      <h1 className="mb-1 text-lg font-semibold">Phòng thi — {(exam as Exam).title}</h1>
+      <h1 className="mb-1 text-lg font-semibold text-slate-900">Phòng thi — {(exam as Exam).title}</h1>
       <p className="mb-4 text-sm text-slate-500">
-        Học sinh vào thi tại <code className="rounded bg-slate-100 px-1">/exam/join</code> bằng mã
+        Học sinh vào thi tại <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs">/exam/join</code> bằng mã
         phòng bên dưới.
       </p>
 
-      <div className="mb-4">
+      <div className="mb-5">
         <CreateRoomForm examId={examId} />
       </div>
 
-      <div className="space-y-2">
+      <div className="space-y-2.5">
         {(rooms as ExamRoom[] | null)?.map((room) => (
-          <div key={room.id} className="flex items-center justify-between rounded-lg border bg-white p-4">
+          <div key={room.id} className="card flex items-center justify-between p-4">
             <div>
-              <p className="font-mono text-xl font-bold tracking-widest">{room.code}</p>
+              <div className="flex items-center gap-2">
+                <p className="font-mono text-xl font-bold tracking-widest text-slate-900">{room.code}</p>
+                <RoomActiveToggle roomId={room.id} isActive={room.is_active} />
+              </div>
               <p className="text-xs text-slate-500">
                 Tạo lúc {new Date(room.created_at).toLocaleString("vi-VN")}
                 {room.opens_at || room.closes_at ? (
@@ -49,21 +52,18 @@ export default async function RoomsPage({ params }: { params: Promise<{ examId: 
                 )}
               </p>
             </div>
-            <div className="flex items-center gap-3">
-              <RoomActiveToggle roomId={room.id} isActive={room.is_active} />
-              <Link
-                href={`/dashboard/exams/${examId}/rooms/${room.id}`}
-                className="text-sm font-medium underline"
-              >
-                Xem kết quả →
-              </Link>
-            </div>
+            <Link
+              href={`/dashboard/exams/${examId}/rooms/${room.id}`}
+              className="shrink-0 text-sm font-medium text-indigo-600 hover:underline"
+            >
+              Xem kết quả →
+            </Link>
           </div>
         ))}
         {!rooms?.length && (
-          <p className="rounded-lg border border-dashed p-8 text-center text-sm text-slate-500">
-            Chưa có phòng thi nào.
-          </p>
+          <div className="card border-dashed p-10 text-center">
+            <p className="text-sm text-slate-500">Chưa có phòng thi nào.</p>
+          </div>
         )}
       </div>
     </div>

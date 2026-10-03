@@ -73,8 +73,8 @@ export default async function RoomResultsPage({
     <div>
       <div className="mb-4 flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-semibold">
-            Kết quả phòng thi <span className="font-mono">{(room as ExamRoom).code}</span>
+          <h1 className="text-lg font-semibold text-slate-900">
+            Kết quả phòng thi <span className="font-mono text-indigo-700">{(room as ExamRoom).code}</span>
           </h1>
           <p className="text-sm text-slate-500">{sessions?.length ?? 0} học sinh đã tham gia</p>
         </div>
@@ -87,21 +87,21 @@ export default async function RoomResultsPage({
         </div>
       )}
 
-      <table className="w-full overflow-hidden rounded-lg border bg-white text-sm">
-        <thead className="bg-slate-50 text-left">
+      <table className="w-full overflow-hidden rounded-xl border border-slate-200 bg-white text-sm shadow-sm">
+        <thead className="bg-slate-50 text-left text-slate-600">
           <tr>
-            <th className="px-3 py-2">Học sinh</th>
-            <th className="px-3 py-2">SBD</th>
-            <th className="px-3 py-2">Trạng thái</th>
-            <th className="px-3 py-2">Điểm</th>
-            <th className="px-3 py-2">Vi phạm</th>
-            <th className="px-3 py-2">Nộp lúc</th>
-            <th className="px-3 py-2"></th>
+            <th className="px-3 py-2.5 font-medium">Học sinh</th>
+            <th className="px-3 py-2.5 font-medium">SBD</th>
+            <th className="px-3 py-2.5 font-medium">Trạng thái</th>
+            <th className="px-3 py-2.5 font-medium">Điểm</th>
+            <th className="px-3 py-2.5 font-medium">Vi phạm</th>
+            <th className="px-3 py-2.5 font-medium">Nộp lúc</th>
+            <th className="px-3 py-2.5"></th>
           </tr>
         </thead>
         <tbody>
           {(sessions as ExamSession[] | null)?.map((s) => (
-            <tr key={s.id} className="border-t">
+            <tr key={s.id} className="border-t border-slate-100 transition hover:bg-slate-50/60">
               <td className="px-3 py-2">{s.student_name}</td>
               <td className="px-3 py-2">{s.student_code}</td>
               <td className="px-3 py-2">
@@ -128,7 +128,7 @@ export default async function RoomResultsPage({
                 {s.submitted_at ? new Date(s.submitted_at).toLocaleString("vi-VN") : "—"}
               </td>
               <td className="px-3 py-2">
-                <Link href={`/dashboard/exams/${examId}/rooms/${roomId}/students/${s.id}`} className="text-sm font-medium underline">
+                <Link href={`/dashboard/exams/${examId}/rooms/${roomId}/students/${s.id}`} className="text-sm font-medium text-indigo-600 hover:underline">
                   Xem chi tiết →
                 </Link>
               </td>
@@ -137,9 +137,9 @@ export default async function RoomResultsPage({
         </tbody>
       </table>
       {!sessions?.length && (
-        <p className="mt-4 rounded-lg border border-dashed p-8 text-center text-sm text-slate-500">
-          Chưa có học sinh nào tham gia phòng thi này.
-        </p>
+        <div className="card mt-4 border-dashed p-10 text-center">
+          <p className="text-sm text-slate-500">Chưa có học sinh nào tham gia phòng thi này.</p>
+        </div>
       )}
     </div>
   );

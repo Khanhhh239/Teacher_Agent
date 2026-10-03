@@ -28,14 +28,14 @@ export default async function ExamReviewPage({
     <div className="flex h-[calc(100vh-4rem)] flex-col">
       <div className="mb-4 flex shrink-0 items-center justify-between">
         <div>
-          <h1 className="text-lg font-semibold">{(exam as Exam).title}</h1>
+          <h1 className="text-lg font-semibold text-slate-900">{(exam as Exam).title}</h1>
           <p className="text-sm text-slate-500">
             {(exam as Exam).subject} · {(exam as Exam).duration_minutes} phút · {(questions as Question[] | null)?.length ?? 0} câu
-            {flaggedCount > 0 && <span className="font-medium text-amber-700"> · {flaggedCount} câu có cờ cảnh báo, soát kỹ các câu này</span>}
+            {flaggedCount > 0 && <span className="font-medium text-amber-600"> · {flaggedCount} câu có cờ cảnh báo, soát kỹ các câu này</span>}
             {(exam as Exam).original_file_url && (
               <>
                 {" · "}
-                <a href={(exam as Exam).original_file_url!} target="_blank" rel="noreferrer" className="underline hover:text-slate-700">
+                <a href={(exam as Exam).original_file_url!} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">
                   Xem file PDF gốc
                 </a>
               </>

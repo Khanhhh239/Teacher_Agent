@@ -163,23 +163,32 @@ export default function TakeExamPage({ params }: { params: Promise<{ sessionId: 
   );
 
   if (!data) {
-    return <div className="flex min-h-screen items-center justify-center">Đang tải đề thi...</div>;
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-slate-50">
+        <div className="h-9 w-9 animate-spin rounded-full border-4 border-indigo-100 border-t-indigo-600" />
+        <p className="text-slate-500">Đang tải đề thi...</p>
+      </div>
+    );
   }
 
   if (kicked) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-2 p-4 text-center">
-        <p className="text-lg font-semibold text-red-700">Bạn đã bị tự động nộp bài</p>
-        <p className="text-slate-600">Do vi phạm quy định phòng thi quá số lần cho phép. Đang đưa bạn ra khỏi phòng thi...</p>
+      <div className="flex min-h-screen flex-col items-center justify-center gap-2 bg-slate-50 p-4 text-center">
+        <div className="card max-w-sm p-6">
+          <p className="text-lg font-semibold text-red-700">Bạn đã bị tự động nộp bài</p>
+          <p className="mt-1 text-sm text-slate-600">Do vi phạm quy định phòng thi quá số lần cho phép. Đang đưa bạn ra khỏi phòng thi...</p>
+        </div>
       </div>
     );
   }
 
   if (submitted || data.status !== "in_progress") {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-2 p-4 text-center">
-        <p className="text-lg font-semibold text-green-700">Đã nộp bài thành công</p>
-        <p className="text-slate-600">Kết quả sẽ được giáo viên công bố. Đang đưa bạn ra khỏi phòng thi...</p>
+      <div className="flex min-h-screen flex-col items-center justify-center gap-2 bg-slate-50 p-4 text-center">
+        <div className="card max-w-sm p-6">
+          <p className="text-lg font-semibold text-green-700">Đã nộp bài thành công</p>
+          <p className="mt-1 text-sm text-slate-600">Kết quả sẽ được giáo viên công bố. Đang đưa bạn ra khỏi phòng thi...</p>
+        </div>
       </div>
     );
   }
@@ -187,10 +196,15 @@ export default function TakeExamPage({ params }: { params: Promise<{ sessionId: 
   return (
     <div className="flex h-screen flex-col bg-slate-50">
       <header className="flex shrink-0 items-center justify-between border-b bg-white px-4 py-3 shadow-sm">
-        <h1 className="font-semibold">{data.exam_title}</h1>
+        <div className="flex items-center gap-2.5">
+          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-600 text-[10px] font-bold text-white">
+            AI
+          </span>
+          <h1 className="font-semibold text-slate-900">{data.exam_title}</h1>
+        </div>
         <span
-          className={`rounded-md px-3 py-1 font-mono text-lg font-bold ${
-            remaining < 300 ? "bg-red-100 text-red-700" : "bg-slate-100"
+          className={`rounded-lg px-3 py-1.5 font-mono text-lg font-bold tabular-nums ${
+            remaining < 300 ? "bg-red-100 text-red-700" : "bg-indigo-50 text-indigo-700"
           }`}
         >
           {formatTime(remaining)}
@@ -198,7 +212,7 @@ export default function TakeExamPage({ params }: { params: Promise<{ sessionId: 
       </header>
 
       {toast && (
-        <div key={toast.key} className="shrink-0 animate-pulse bg-amber-500 px-4 py-2 text-center text-sm font-medium text-white">
+        <div key={toast.key} className="shrink-0 bg-amber-500 px-4 py-2 text-center text-sm font-medium text-white">
           {toast.text}
         </div>
       )}
@@ -209,11 +223,7 @@ export default function TakeExamPage({ params }: { params: Promise<{ sessionId: 
 
       <div className="shrink-0 border-t bg-white p-3">
         <div className="flex justify-end">
-          <button
-            onClick={openConfirm}
-            disabled={submitting}
-            className="rounded-md bg-slate-900 px-6 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-slate-700 disabled:opacity-50"
-          >
+          <button onClick={openConfirm} disabled={submitting} className="btn-primary px-6 py-2.5">
             {submitting ? "Đang nộp..." : "Nộp bài"}
           </button>
         </div>
@@ -222,7 +232,7 @@ export default function TakeExamPage({ params }: { params: Promise<{ sessionId: 
       {confirmOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-xl">
-            <h2 className="mb-1 font-semibold">Xác nhận nộp bài</h2>
+            <h2 className="mb-1 font-semibold text-slate-900">Xác nhận nộp bài</h2>
             <p className="mb-4 text-sm text-slate-600">
               Sau khi nộp sẽ không thể sửa lại câu trả lời. Nhập lại <strong>Số báo danh</strong> của bạn để xác nhận.
             </p>
@@ -231,21 +241,15 @@ export default function TakeExamPage({ params }: { params: Promise<{ sessionId: 
               value={confirmCode}
               onChange={(e) => setConfirmCode(e.target.value)}
               placeholder="Số báo danh"
-              className="mb-2 w-full rounded-md border px-3 py-2 text-sm"
+              className="input-field mb-2"
               onKeyDown={(e) => e.key === "Enter" && confirmSubmit()}
             />
             {confirmError && <p className="mb-2 text-sm text-red-600">{confirmError}</p>}
             <div className="mt-3 flex justify-end gap-2">
-              <button
-                onClick={() => setConfirmOpen(false)}
-                className="rounded-md border px-3 py-1.5 text-sm font-medium text-slate-700"
-              >
+              <button onClick={() => setConfirmOpen(false)} className="btn-secondary">
                 Quay lại làm bài
               </button>
-              <button
-                onClick={confirmSubmit}
-                className="rounded-md bg-green-600 px-3 py-1.5 text-sm font-medium text-white"
-              >
+              <button onClick={confirmSubmit} className="inline-flex items-center justify-center rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-green-700">
                 Xác nhận nộp bài
               </button>
             </div>

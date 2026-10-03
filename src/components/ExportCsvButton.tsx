@@ -22,8 +22,8 @@ export function ExportCsvButton({
   }
 
   return (
-    <button onClick={download} className="rounded-md border px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
-      Xuất file kết quả (CSV)
+    <button onClick={download} className="btn-secondary">
+      ⬇ Xuất file kết quả (CSV)
     </button>
   );
 }

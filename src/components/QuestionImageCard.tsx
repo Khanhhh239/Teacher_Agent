@@ -20,9 +20,13 @@ function QuestionImageCardImpl({
 }) {
   return (
     <div>
-      {showPartHeader && partLabel && <h2 className="mb-2 mt-3 font-bold">{partLabel}</h2>}
-      <div className="rounded-lg border bg-white p-3">
-        <p className="mb-2 text-xs font-bold text-slate-500">Câu {number}</p>
+      {showPartHeader && partLabel && (
+        <h2 className="mb-2 mt-4 rounded-lg bg-indigo-50 px-3 py-1.5 text-sm font-bold text-indigo-700">{partLabel}</h2>
+      )}
+      <div className="card p-3">
+        <p className="mb-2 inline-flex items-center rounded-md bg-indigo-50 px-2 py-0.5 text-xs font-bold text-indigo-700">
+          Câu {number}
+        </p>
         {imageUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={imageUrl} alt={`Câu ${number}`} loading="lazy" decoding="async" className="w-full rounded border bg-white" />

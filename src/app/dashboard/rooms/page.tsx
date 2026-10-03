@@ -19,23 +19,23 @@ export default async function RoomBankPage() {
 
   return (
     <div>
-      <h1 className="mb-1 text-lg font-semibold">Kho phòng thi</h1>
+      <h1 className="mb-1 text-lg font-semibold text-slate-900">Kho phòng thi</h1>
       <p className="mb-4 text-sm text-slate-500">
         Toàn bộ phòng thi đã tạo, từ mọi đề thi. Học sinh vào thi tại{" "}
-        <code className="rounded bg-slate-100 px-1">/exam/join</code> bằng mã phòng.
+        <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs">/exam/join</code> bằng mã phòng.
       </p>
 
       <div className="mb-5">
         <RoomBankQuickCreate readyExams={(exams as Exam[] | null) ?? []} />
       </div>
 
-      <div className="space-y-2">
+      <div className="space-y-2.5">
         {((rooms as RoomWithExam[] | null) ?? []).map((room) => (
-          <div key={room.id} className="rounded-lg border bg-white p-4">
+          <div key={room.id} className="card p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <p className="font-mono text-lg font-bold tracking-widest">{room.code}</p>
+                  <p className="font-mono text-lg font-bold tracking-widest text-slate-900">{room.code}</p>
                   <RoomActiveToggle roomId={room.id} isActive={room.is_active} />
                 </div>
                 <p className="truncate text-sm font-medium text-slate-700">{room.exams.title}</p>
@@ -55,7 +55,7 @@ export default async function RoomBankPage() {
               </div>
               <Link
                 href={`/dashboard/exams/${room.exam_id}/rooms/${room.id}`}
-                className="shrink-0 text-sm font-medium underline"
+                className="shrink-0 text-sm font-medium text-indigo-600 hover:underline"
               >
                 Xem kết quả →
               </Link>
@@ -63,9 +63,9 @@ export default async function RoomBankPage() {
           </div>
         ))}
         {!rooms?.length && (
-          <p className="rounded-lg border border-dashed p-8 text-center text-sm text-slate-500">
-            Chưa có phòng thi nào.
-          </p>
+          <div className="card border-dashed p-10 text-center">
+            <p className="text-sm text-slate-500">Chưa có phòng thi nào.</p>
+          </div>
         )}
       </div>
     </div>

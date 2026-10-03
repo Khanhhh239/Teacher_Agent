@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
+import { AuthCard } from "@/components/AuthCard";
 
 export default function SignupPage() {
   const [email, setEmail] = useState("");
@@ -34,72 +35,59 @@ export default function SignupPage() {
 
   if (done) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
-        <div className="max-w-sm rounded-xl border bg-white p-6 text-center shadow-sm">
-          <p>Kiểm tra email để xác nhận tài khoản, sau đó đăng nhập.</p>
-          <Link href="/login" className="mt-4 inline-block font-medium underline">
-            Về trang đăng nhập
-          </Link>
-        </div>
-      </div>
+      <AuthCard title="Kiểm tra email của bạn">
+        <p className="text-center text-sm text-slate-600">Kiểm tra email để xác nhận tài khoản, sau đó đăng nhập.</p>
+        <Link href="/login" className="btn-primary w-full">
+          Về trang đăng nhập
+        </Link>
+      </AuthCard>
     );
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
-      <form onSubmit={handleSubmit} className="w-full max-w-sm space-y-4 rounded-xl border bg-white p-6 shadow-sm">
-        <h1 className="text-xl font-semibold">Đăng ký giáo viên</h1>
-
+    <AuthCard title="Đăng ký giáo viên">
+      <form onSubmit={handleSubmit} className="space-y-4">
         <div>
-          <label className="mb-1 block text-sm font-medium">Họ tên</label>
-          <input
-            required
-            value={fullName}
-            onChange={(e) => setFullName(e.target.value)}
-            className="w-full rounded-md border px-3 py-2 text-sm"
-          />
+          <label className="field-label">Họ tên</label>
+          <input required value={fullName} onChange={(e) => setFullName(e.target.value)} className="input-field" />
         </div>
 
         <div>
-          <label className="mb-1 block text-sm font-medium">Email</label>
+          <label className="field-label">Email</label>
           <input
             type="email"
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="w-full rounded-md border px-3 py-2 text-sm"
+            className="input-field"
           />
         </div>
 
         <div>
-          <label className="mb-1 block text-sm font-medium">Mật khẩu</label>
+          <label className="field-label">Mật khẩu</label>
           <input
             type="password"
             required
             minLength={6}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="w-full rounded-md border px-3 py-2 text-sm"
+            className="input-field"
           />
         </div>
 
         {error && <p className="text-sm text-red-600">{error}</p>}
 
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full rounded-md bg-slate-900 py-2 text-sm font-medium text-white disabled:opacity-50"
-        >
+        <button type="submit" disabled={loading} className="btn-primary w-full">
           {loading ? "Đang tạo..." : "Đăng ký"}
         </button>
 
         <p className="text-center text-sm text-slate-600">
           Đã có tài khoản?{" "}
-          <Link href="/login" className="font-medium text-slate-900 underline">
+          <Link href="/login" className="font-medium text-indigo-600 hover:underline">
             Đăng nhập
           </Link>
         </p>
       </form>
-    </div>
+    </AuthCard>
   );
 }

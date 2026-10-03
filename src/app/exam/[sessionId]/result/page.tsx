@@ -17,8 +17,10 @@ export default function ResultPage({ params }: { params: Promise<{ sessionId: st
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-2 bg-slate-50 p-4 text-center">
-      <p className="text-lg font-semibold text-green-700">Đã nộp bài thành công</p>
-      <p className="text-slate-600">Kết quả sẽ được giáo viên công bố. Đang chuyển hướng...</p>
+      <div className="card max-w-sm p-6">
+        <p className="text-lg font-semibold text-green-700">Đã nộp bài thành công</p>
+        <p className="mt-1 text-sm text-slate-600">Kết quả sẽ được giáo viên công bố. Đang chuyển hướng...</p>
+      </div>
     </div>
   );
 }

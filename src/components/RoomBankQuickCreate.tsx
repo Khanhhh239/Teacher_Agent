@@ -13,7 +13,7 @@ export function RoomBankQuickCreate({ readyExams }: { readyExams: Exam[] }) {
 
   if (readyExams.length === 0) {
     return (
-      <div className="rounded-lg border border-dashed bg-white p-4 text-sm text-slate-500">
+      <div className="card border-dashed p-4 text-sm text-slate-500">
         Chưa có đề thi nào ở trạng thái "Sẵn sàng" để tạo phòng. Vào tab{" "}
         <span className="font-medium text-slate-700">Kho đề thi</span>, duyệt xong một đề rồi quay
         lại đây.
@@ -22,14 +22,10 @@ export function RoomBankQuickCreate({ readyExams }: { readyExams: Exam[] }) {
   }
 
   return (
-    <div className="flex flex-wrap items-end gap-3 rounded-lg border bg-white p-4">
-      <label className="flex flex-1 flex-col gap-1 text-sm">
+    <div className="card flex flex-wrap items-end gap-3 p-4">
+      <label className="flex flex-1 flex-col gap-1 text-sm text-slate-700">
         Chọn đề thi để tạo phòng
-        <select
-          value={examId}
-          onChange={(e) => setExamId(e.target.value)}
-          className="rounded-md border px-3 py-2 text-sm"
-        >
+        <select value={examId} onChange={(e) => setExamId(e.target.value)} className="input-field">
           {readyExams.map((e) => (
             <option key={e.id} value={e.id}>
               {e.title}
@@ -37,10 +33,7 @@ export function RoomBankQuickCreate({ readyExams }: { readyExams: Exam[] }) {
           ))}
         </select>
       </label>
-      <button
-        onClick={() => router.push(`/dashboard/exams/${examId}/rooms`)}
-        className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white"
-      >
+      <button onClick={() => router.push(`/dashboard/exams/${examId}/rooms`)} className="btn-primary">
         + Tạo phòng thi mới
       </button>
     </div>

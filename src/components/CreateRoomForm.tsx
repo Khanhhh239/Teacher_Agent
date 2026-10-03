@@ -45,70 +45,62 @@ export function CreateRoomForm({ examId }: { examId: string }) {
   }
 
   return (
-    <div className="rounded-lg border bg-white p-4">
-      <label className="mb-3 flex items-center gap-2 text-sm">
+    <div className="card p-4">
+      <label className="mb-3 flex items-center gap-2 text-sm text-slate-700">
         <input
           type="checkbox"
           checked={requireFullscreen}
           onChange={(e) => setRequireFullscreen(e.target.checked)}
+          className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
         />
         Bắt buộc toàn màn hình + ghi log vi phạm (khuyến nghị)
       </label>
-      <label className="mb-3 flex items-center gap-2 text-sm">
-        <input type="checkbox" checked={limitWindow} onChange={(e) => setLimitWindow(e.target.checked)} />
+      <label className="mb-3 flex items-center gap-2 text-sm text-slate-700">
+        <input
+          type="checkbox"
+          checked={limitWindow}
+          onChange={(e) => setLimitWindow(e.target.checked)}
+          className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+        />
         Giới hạn khung giờ được VÀO phòng thi (khác với thời lượng làm bài của đề — học sinh có
         thể cần thời gian chuẩn bị trước khi bắt đầu tính giờ)
       </label>
       {limitWindow && (
-        <div className="mb-3 flex flex-wrap gap-4">
-          <label className="flex flex-col gap-1 text-sm">
+        <div className="mb-3 flex flex-wrap gap-4 rounded-lg bg-slate-50 p-3">
+          <label className="flex flex-col gap-1 text-sm text-slate-700">
             Mở phòng từ
-            <input
-              type="datetime-local"
-              value={opensAt}
-              onChange={(e) => setOpensAt(e.target.value)}
-              className="rounded border px-2 py-1"
-            />
+            <input type="datetime-local" value={opensAt} onChange={(e) => setOpensAt(e.target.value)} className="input-field" />
           </label>
-          <label className="flex flex-col gap-1 text-sm">
+          <label className="flex flex-col gap-1 text-sm text-slate-700">
             Đóng phòng lúc
-            <input
-              type="datetime-local"
-              value={closesAt}
-              onChange={(e) => setClosesAt(e.target.value)}
-              className="rounded border px-2 py-1"
-            />
+            <input type="datetime-local" value={closesAt} onChange={(e) => setClosesAt(e.target.value)} className="input-field" />
           </label>
         </div>
       )}
-      <div className="mb-3 flex flex-wrap gap-4">
-        <label className="flex items-center gap-2 text-sm">
+      <div className="mb-4 flex flex-wrap gap-4">
+        <label className="flex items-center gap-2 text-sm text-slate-700">
           Số lần làm bài tối đa
           <input
             type="number"
             min={1}
             value={maxAttempts}
             onChange={(e) => setMaxAttempts(Number(e.target.value))}
-            className="w-16 rounded border px-2 py-1"
+            className="input-field w-16 text-center"
           />
         </label>
-        <label className="flex items-center gap-2 text-sm">
+        <label className="flex items-center gap-2 text-sm text-slate-700">
           Số vi phạm thì tự động đuổi khỏi phòng
           <input
             type="number"
             min={1}
             value={violationKickLimit}
             onChange={(e) => setViolationKickLimit(Number(e.target.value))}
-            className="w-16 rounded border px-2 py-1"
+            className="input-field w-16 text-center"
           />
         </label>
       </div>
       {error && <p className="mb-2 text-sm text-red-600">{error}</p>}
-      <button
-        onClick={handleCreate}
-        disabled={busy}
-        className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
-      >
+      <button onClick={handleCreate} disabled={busy} className="btn-primary">
         {busy ? "Đang tạo..." : "+ Tạo phòng thi mới"}
       </button>
     </div>

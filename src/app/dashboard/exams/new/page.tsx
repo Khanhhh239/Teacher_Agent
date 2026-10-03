@@ -42,16 +42,26 @@ function Dropzone({
           setDragOver(false);
           onPick(e.dataTransfer.files?.[0] ?? null);
         }}
-        className={`flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border-2 border-dashed p-6 text-center transition-colors ${
-          dragOver ? "border-slate-900 bg-slate-50" : "border-slate-300 hover:border-slate-400"
+        className={`flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed p-6 text-center transition-colors ${
+          dragOver ? "border-indigo-500 bg-indigo-50" : file ? "border-green-300 bg-green-50/50" : "border-slate-300 hover:border-indigo-300 hover:bg-indigo-50/30"
         }`}
       >
-        <svg className="h-8 w-8 text-slate-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M12 16.5V9.75m0 0 3 3m-3-3-3 3M6.75 19.5a4.5 4.5 0 0 1-1.41-8.775 5.25 5.25 0 0 1 10.233-2.33 3 3 0 0 1 3.758 3.848A3.752 3.752 0 0 1 18 19.5H6.75Z"
-          />
+        <svg
+          className={`h-8 w-8 ${file ? "text-green-500" : "text-slate-400"}`}
+          fill="none"
+          viewBox="0 0 24 24"
+          strokeWidth={1.5}
+          stroke="currentColor"
+        >
+          {file ? (
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+          ) : (
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M12 16.5V9.75m0 0 3 3m-3-3-3 3M6.75 19.5a4.5 4.5 0 0 1-1.41-8.775 5.25 5.25 0 0 1 10.233-2.33 3 3 0 0 1 3.758 3.848A3.752 3.752 0 0 1 18 19.5H6.75Z"
+            />
+          )}
         </svg>
         {file ? (
           <p className="text-sm font-medium text-slate-900">{file.name}</p>
@@ -170,7 +180,7 @@ export default function NewExamPage() {
   if (busy) {
     return (
       <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4">
-        <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-slate-900" />
+        <div className="h-10 w-10 animate-spin rounded-full border-4 border-indigo-100 border-t-indigo-600" />
         <p className="text-slate-600">
           Đang cắt ảnh từng câu từ đề và đọc file đáp án (thường dưới 1 phút)...
         </p>
@@ -180,9 +190,10 @@ export default function NewExamPage() {
 
   return (
     <div className="max-w-2xl">
-      <h1 className="mb-4 text-lg font-semibold">Tạo đề thi mới</h1>
+      <h1 className="mb-1 text-lg font-semibold text-slate-900">Tạo đề thi mới</h1>
+      <p className="mb-4 text-sm text-slate-500">Upload file đề (PDF) và file đáp án để hệ thống tự cắt từng câu.</p>
 
-      <form onSubmit={handleSubmit} className="space-y-4 rounded-lg border bg-white p-5">
+      <form onSubmit={handleSubmit} className="card space-y-4 p-5">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Dropzone
             label="1. File đề thi"
@@ -199,7 +210,7 @@ export default function NewExamPage() {
             onPick={(f) => pickFile(setAnswerFile, f, ANSWER_ACCEPTED_EXTS, "File đáp án chỉ chấp nhận .docx, .pdf hoặc ảnh (.jpg/.png/.webp).")}
           />
         </div>
-        <p className="text-xs text-slate-500">
+        <p className="rounded-lg bg-slate-50 p-3 text-xs leading-relaxed text-slate-500">
           File đề thi dùng thẳng ẢNH GỐC cắt từ PDF làm nội dung câu hỏi (không chép lại thành chữ) để không còn lỗi
           đọc sai công thức — vì vậy chỉ nhận file .pdf xuất từ Word, có lớp chữ thật (File → Save As → PDF). File đáp
           án vẫn đọc bằng AI như trước, chấp nhận .docx/.pdf/ảnh. Loại câu và đáp án đúng lấy từ file đáp án; câu nào
@@ -208,39 +219,35 @@ export default function NewExamPage() {
 
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="mb-1 block text-sm font-medium">Môn học (tuỳ chọn)</label>
+            <label className="field-label">Môn học (tuỳ chọn)</label>
             <input
               value={subject}
               onChange={(e) => setSubject(e.target.value)}
               placeholder="Hệ thống sẽ tự nhận diện nếu để trống"
-              className="w-full rounded-md border px-3 py-2 text-sm"
+              className="input-field"
             />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium">Thời gian (phút)</label>
+            <label className="field-label">Thời gian (phút)</label>
             <input
               type="number"
               value={duration}
               onChange={(e) => setDuration(Number(e.target.value))}
-              className="w-full rounded-md border px-3 py-2 text-sm"
+              className="input-field"
             />
           </div>
         </div>
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
         {warnings.length > 0 && (
-          <div className="rounded-md bg-amber-50 p-3 text-xs text-amber-800">
+          <div className="rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
             {warnings.map((w, i) => (
               <p key={i}>⚠ {w}</p>
             ))}
           </div>
         )}
 
-        <button
-          type="submit"
-          disabled={!file || !answerFile}
-          className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-        >
+        <button type="submit" disabled={!file || !answerFile} className="btn-primary">
           Tiếp tục
         </button>
       </form>

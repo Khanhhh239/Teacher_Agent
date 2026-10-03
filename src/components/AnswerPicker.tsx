@@ -40,14 +40,14 @@ function Btn({
       : tone === "red"
         ? "bg-red-600 text-white border-red-600"
         : active
-          ? "bg-slate-900 text-white border-slate-900"
-          : "bg-white text-slate-700 border-slate-300 hover:border-slate-400";
+          ? "bg-indigo-600 text-white border-indigo-600"
+          : "bg-white text-slate-700 border-slate-300 hover:border-indigo-300 hover:bg-indigo-50/40";
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={!onClick}
-      className={`h-7 min-w-7 rounded border px-1.5 text-xs font-semibold ${toneClass} ${!onClick ? "cursor-default" : ""}`}
+      className={`h-7 min-w-7 rounded-md border px-1.5 text-xs font-semibold transition-colors ${toneClass} ${!onClick ? "cursor-default" : ""}`}
     >
       {children}
     </button>
@@ -69,8 +69,8 @@ function AnswerPickerImpl({
   if (type === "multiple_choice") {
     const selected = (value as { selected: string } | null)?.selected;
     return (
-      <div className="flex items-center gap-1.5 rounded-md border border-slate-200 px-2 py-1.5">
-        <span className="w-7 shrink-0 text-right text-xs font-bold text-slate-500">{number}</span>
+      <div className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-2">
+        <span className="w-7 shrink-0 text-right text-xs font-bold text-indigo-600/80">{number}</span>
         {optionKeys.map((key) => {
           const isSelected = selected === key;
           const isCorrectKey = key === correctAnswer;
@@ -92,7 +92,7 @@ function AnswerPickerImpl({
   if (type === "true_false_group") {
     const statements = (value as { statements: Record<string, boolean> } | null)?.statements ?? {};
     return (
-      <div className="space-y-1 rounded-md border border-slate-200 px-2 py-1.5">
+      <div className="space-y-1 rounded-lg border border-slate-200 bg-white px-2.5 py-2">
         {subKeys.map((key) => {
           const current = statements[key];
           const correctVal = correctStatements?.[key];
@@ -112,7 +112,7 @@ function AnswerPickerImpl({
                 : "neutral";
           return (
             <div key={key} className="flex items-center gap-1.5">
-              <span className="w-10 shrink-0 text-right text-xs font-bold text-slate-500">
+              <span className="w-10 shrink-0 text-right text-xs font-bold text-indigo-600/80">
                 {number}
                 {key})
               </span>
@@ -136,14 +136,14 @@ function AnswerPickerImpl({
   const text = (value as { text: string } | null)?.text ?? "";
   const isWrong = showCorrectness && correctText != null && text.trim() !== "" && text !== correctText;
   return (
-    <div className="flex items-center gap-1.5 rounded-md border border-slate-200 px-2 py-1.5">
-      <span className="w-7 shrink-0 text-right text-xs font-bold text-slate-500">{number}</span>
+    <div className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-2">
+      <span className="w-7 shrink-0 text-right text-xs font-bold text-indigo-600/80">{number}</span>
       {onChange ? (
         <input
           value={text}
           onChange={(e) => onChange({ text: e.target.value })}
           placeholder="Đáp án"
-          className="h-7 w-28 rounded border border-slate-300 px-2 text-xs"
+          className="h-7 w-28 rounded-md border border-slate-300 px-2 text-xs outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
         />
       ) : (
         <span className={`text-xs font-semibold ${showCorrectness ? (isWrong ? "text-red-600" : "text-green-700") : ""}`}>

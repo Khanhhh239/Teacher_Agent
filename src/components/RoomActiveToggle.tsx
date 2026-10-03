@@ -20,8 +20,8 @@ export function RoomActiveToggle({ roomId, isActive }: { roomId: string; isActiv
     <button
       onClick={toggle}
       disabled={busy}
-      className={`rounded-full px-3 py-1 text-xs font-medium ${
-        isActive ? "bg-green-100 text-green-800" : "bg-slate-200 text-slate-600"
+      className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+        isActive ? "bg-green-100 text-green-700 hover:bg-green-200" : "bg-slate-100 text-slate-500 hover:bg-slate-200"
       }`}
     >
       {isActive ? "Đang mở" : "Đã đóng"}

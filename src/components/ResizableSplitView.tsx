@@ -55,19 +55,19 @@ export function ResizableSplitView({
       </div>
       <div
         onPointerDown={startDrag}
-        className="group relative mx-1 w-2.5 shrink-0 cursor-col-resize select-none rounded bg-slate-100 hover:bg-slate-300 active:bg-slate-400"
+        className="group relative mx-1 w-2.5 shrink-0 cursor-col-resize select-none rounded bg-slate-100 transition hover:bg-indigo-100 active:bg-indigo-200"
         title="Kéo sang trái/phải để thu/giãn khung"
       >
         <div className="pointer-events-none absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 gap-0.5">
           <div className="flex flex-col gap-1">
-            <span className="h-1 w-1 rounded-full bg-slate-400 group-hover:bg-slate-600" />
-            <span className="h-1 w-1 rounded-full bg-slate-400 group-hover:bg-slate-600" />
-            <span className="h-1 w-1 rounded-full bg-slate-400 group-hover:bg-slate-600" />
+            <span className="h-1 w-1 rounded-full bg-slate-400 group-hover:bg-indigo-500" />
+            <span className="h-1 w-1 rounded-full bg-slate-400 group-hover:bg-indigo-500" />
+            <span className="h-1 w-1 rounded-full bg-slate-400 group-hover:bg-indigo-500" />
           </div>
           <div className="flex flex-col gap-1">
-            <span className="h-1 w-1 rounded-full bg-slate-400 group-hover:bg-slate-600" />
-            <span className="h-1 w-1 rounded-full bg-slate-400 group-hover:bg-slate-600" />
-            <span className="h-1 w-1 rounded-full bg-slate-400 group-hover:bg-slate-600" />
+            <span className="h-1 w-1 rounded-full bg-slate-400 group-hover:bg-indigo-500" />
+            <span className="h-1 w-1 rounded-full bg-slate-400 group-hover:bg-indigo-500" />
+            <span className="h-1 w-1 rounded-full bg-slate-400 group-hover:bg-indigo-500" />
           </div>
         </div>
       </div>
