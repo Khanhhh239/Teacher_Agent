@@ -112,20 +112,22 @@ export async function POST(request: Request) {
     );
   }
 
-  // 1) Phân đoạn + cắt ảnh từng câu từ PDF đề — HOÀN TOÀN BẰNG CODE, không gọi AI. Trả lỗi rõ
-  // ràng nếu PDF không có lớp chữ (vd bản quét/ảnh) hoặc số thứ tự câu không liên tục.
-  const imageResult = await buildImageQuestions(buffer);
+  // 1) Phân đoạn + cắt ảnh từng câu từ PDF đề — nhánh chính hoàn toàn bằng code, không gọi AI.
+  // Nếu PDF không có lớp chữ thật, tự động thử nhánh dự phòng (AI chỉ định vị toạ độ nhãn "Câu
+  // N", không đọc nội dung — xem visionSegment.ts); chỉ báo lỗi nếu cả 2 nhánh đều thất bại.
+  const warnings: string[] = [];
+  const EXAM_SEGMENT_DEADLINE = startedAt + 150_000;
+  const imageResult = await buildImageQuestions(buffer, { warnings, deadline: EXAM_SEGMENT_DEADLINE });
   if (!imageResult.ok) {
     await cleanupTmp();
     return NextResponse.json(
-      { error: `Không phân đoạn được đề thi: ${imageResult.reason}. Hệ thống cần file PDF xuất trực tiếp từ Word (có lớp chữ thật, đánh số "Câu 1.", "Câu 2."... liên tục), không phải bản quét/chụp ảnh.` },
+      { error: `Không phân đoạn được đề thi: ${imageResult.reason}. Hệ thống cần file PDF có lớp chữ thật (xuất từ Word) hoặc định vị được nhãn "Câu 1.", "Câu 2."... liên tục.` },
       { status: 400 }
     );
   }
   const questionCount = imageResult.questions.length;
 
   // 2) Đọc file đáp án (vẫn cần AI — có thể là lời giải dài, ảnh chụp, hay bảng ngắn gọn).
-  const warnings: string[] = [];
   let answerKey;
   try {
     if (answerExt === "docx") {
@@ -156,6 +158,9 @@ export async function POST(request: Request) {
   if (blockingCount > 0) {
     warnings.push(`${blockingCount} câu chưa có đáp án khớp trong file đáp án — giáo viên cần tự chọn loại câu và đáp án đúng cho các câu này ở bước duyệt.`);
   }
+  if (imageResult.usedVision) {
+    warnings.push("File đề không có lớp chữ thật nên hệ thống dùng AI để định vị ranh giới từng câu (không đọc nội dung) — soát kỹ từng ảnh câu hỏi ở bước duyệt, ranh giới cắt có thể hơi lệch.");
+  }
 
   const { data: exam, error: examError } = await supabase
     .from("exams")
@@ -165,7 +170,7 @@ export async function POST(request: Request) {
       subject: "",
       duration_minutes: durationMinutes,
       status: "reviewing",
-      source_branch: "PDF_TEXT_LAYER",
+      source_branch: imageResult.usedVision ? "PDF_IMAGE_ONLY" : "PDF_TEXT_LAYER",
     })
     .select()
     .single();
@@ -220,7 +225,7 @@ export async function POST(request: Request) {
       max_score: row.max_score,
       raw_ocr_notes: null,
       needs_review: row.blocking,
-      extraction_meta: { flags: row.flags, blocking: row.blocking, source: "text_layer" },
+      extraction_meta: { flags: row.flags, blocking: row.blocking, source: imageResult.usedVision ? "vision_label" : "text_layer" },
     });
     if (insertError) warnings.push(`Không lưu được câu ${i + 1}: ${insertError.message}`);
   }

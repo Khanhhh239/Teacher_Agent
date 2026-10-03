@@ -72,20 +72,37 @@ export interface ImageQuestion {
 }
 
 /**
- * Phân đoạn + render + xóa nhãn + cắt/ghép — hoàn toàn bằng code, không gọi AI. Trả về null
- * nếu KHÔNG phân đoạn được (PDF không có lớp chữ — bản quét/ảnh, hoặc đánh số không liên tục).
+ * Phân đoạn + render + xóa nhãn + cắt/ghép. Nhánh chính (phân đoạn bằng lớp chữ PDF) không gọi
+ * AI lần nào. Khi PDF không có lớp chữ thật (vd file chính thức ghép từ nhiều dải ảnh — xem
+ * visionSegment.ts), tự động chuyển sang nhánh dự phòng: AI CHỈ định vị toạ độ nhãn "Câu N",
+ * không đọc/chép nội dung — ảnh câu hỏi hiển thị cho học sinh vẫn luôn là ảnh gốc 100%.
  */
 export async function buildImageQuestions(
-  pdf: Buffer
-): Promise<{ ok: true; title: string; questions: ImageQuestion[] } | { ok: false; reason: string }> {
+  pdf: Buffer,
+  opts: { warnings?: string[]; deadline?: number } = {}
+): Promise<{ ok: true; title: string; questions: ImageQuestion[]; usedVision: boolean } | { ok: false; reason: string }> {
   const pageLines = await extractPageLines(pdf);
-  const seg = segmentFromLines(pageLines);
+  const { renderPdfPages } = await import("./pdfRender");
+  const rawPagePngs = renderPdfPages(pdf, RENDER_DPI);
+
+  let seg = segmentFromLines(pageLines);
+  let usedVision = false;
+  if (!seg.ok && seg.reason.includes("không có lớp chữ")) {
+    const { segmentFromVisionLabels } = await import("./visionSegment");
+    const pageSizes = pageLines.map((p) => ({ width: p.width, height: p.height }));
+    const visionSeg = await segmentFromVisionLabels(rawPagePngs, pageSizes, opts.warnings, opts.deadline);
+    if (!visionSeg.ok) {
+      return { ok: false, reason: `${seg.reason}. Đã thử định vị bằng AI thị giác (không đọc nội dung) nhưng cũng thất bại: ${visionSeg.reason}` };
+    }
+    seg = visionSeg;
+    usedVision = true;
+  }
   if (!seg.ok) return { ok: false, reason: seg.reason };
 
   const sharp = (await import("sharp")).default;
-  const { renderPdfPages } = await import("./pdfRender");
-  const pageChars = await extractPageChars(pdf);
-  const rawPagePngs = renderPdfPages(pdf, RENDER_DPI);
+  // Toạ độ từng ký tự chỉ có ý nghĩa ở nhánh lớp chữ thật — nhánh AI thị giác dùng labelBoxX1
+  // (toạ độ khung nhãn do AI khoanh) làm điểm cắt tẩy nhãn, xem vòng lặp composite bên dưới.
+  const pageChars = usedVision ? [] : await extractPageChars(pdf);
   const scale = RENDER_DPI / 72;
 
   // Xóa TẤT CẢ nhãn "Câu N." trên mỗi trang trong 1 lượt composite (rẻ hơn nhiều lần composite
@@ -99,7 +116,7 @@ export async function buildImageQuestions(
     }
     const rects = blocksOnPage
       .map((b) => {
-        const cutX = findLabelCutoffX(pageChars[p] ?? [], b.labelLine, b.labelLength);
+        const cutX = findLabelCutoffX(pageChars[p] ?? [], b.labelLine, b.labelLength) ?? b.labelBoxX1 ?? null;
         if (cutX === null) return null;
         const top = Math.max(0, Math.round(b.labelLine.y0 * scale) - 2);
         const height = Math.round((b.labelLine.y1 - b.labelLine.y0) * scale) + 4;
@@ -159,7 +176,7 @@ export async function buildImageQuestions(
   for (const block of seg.blocks) {
     questions.push({ number: block.number, part: block.part, image: await cropBlock(block) });
   }
-  return { ok: true, title: seg.title, questions };
+  return { ok: true, title: seg.title, questions, usedVision };
 }
 
 type KeyKind = "multiple_choice" | "true_false_group" | "short_answer";
