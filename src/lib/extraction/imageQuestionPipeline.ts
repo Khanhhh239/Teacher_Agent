@@ -161,7 +161,12 @@ export async function buildImageQuestions(
     const lines = pageLines[page]?.lines ?? [];
     let nearestAboveY1 = -Infinity;
     for (const l of lines) {
-      if (!l.text.trim() || l.y1 > y0 + 0.5) continue;
+      // Xét MỌI dòng BẮT ĐẦU trước ranh giới (kể cả khi đáy dòng đó vượt nhẹ qua y0 do PAD=2pt
+      // của bước phân đoạn) — lọc theo "y1 <= y0" trước đây bỏ sót đúng trường hợp dòng cuối câu
+      // trước nằm sát ranh giới trong khoảng <2pt, khiến thuật toán tưởng nhầm còn khoảng trống
+      // lớn hơn ở dòng xa hơn phía trên, lố pad vào đè lên dòng đó (đã gặp thực tế: dính nguyên
+      // dòng đáp án A/B/C/D của câu trước vào đầu ảnh câu sau).
+      if (!l.text.trim() || l.y0 >= y0) continue;
       if (l.y1 > nearestAboveY1) nearestAboveY1 = l.y1;
     }
     if (nearestAboveY1 === -Infinity) return TOP_PAD_PT; // không có dòng nào phía trên — an toàn, nới hết mức

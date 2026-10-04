@@ -165,14 +165,42 @@ export function buildBlocksFromBoundaries(
   return { ok: true, blocks };
 }
 
+/** Dòng chữ giống hệt nhau (vd banner quảng cáo/thương hiệu, header/footer lặp lại) xuất hiện
+ * trên từ 2 TRANG KHÁC NHAU trở lên — không phải nội dung câu hỏi thật (câu hỏi không bao giờ
+ * lặp lại nguyên văn giữa các trang) nên coi là "đồ trang trí" giống số trang, loại khỏi vùng
+ * nội dung. Tổng quát cho MỌI file PDF, không chỉ riêng 1 mẫu cụ thể (đã gặp thực tế: banner
+ * "TÀI LIỆU LUYỆN THI..." là CHỮ THẬT trong lớp chữ, không phải ảnh, lặp lại y hệt ở đầu mỗi
+ * trang, khiến thuật toán coi nó là nội dung thật rồi lẫn vào ảnh cắt của câu hỏi liền kề). Chỉ
+ * xét dòng đủ dài (≥10 ký tự) để tránh lầm các nhãn/ký hiệu ngắn trùng lặp ngẫu nhiên.
+ */
+function findRepeatedAcrossPages(pages: PageLines[]): Set<string> {
+  const pagesContainingText = new Map<string, Set<number>>();
+  pages.forEach((p, pageIndex) => {
+    for (const line of p.lines) {
+      const key = line.text.normalize("NFC").trim();
+      if (key.length < 10) continue;
+      if (!pagesContainingText.has(key)) pagesContainingText.set(key, new Set());
+      pagesContainingText.get(key)!.add(pageIndex);
+    }
+  });
+  const repeated = new Set<string>();
+  for (const [key, pageSet] of pagesContainingText) {
+    if (pageSet.size >= 2) repeated.add(key);
+  }
+  return repeated;
+}
+
 export function segmentFromLines(pages: PageLines[]): SegmentResult {
   if (pages.length === 0) return { ok: false, reason: "PDF không có trang nào" };
 
-  // Vùng nội dung từng trang (bỏ số trang) + dòng đã sắp theo thứ tự đọc.
+  const repeatedLines = findRepeatedAcrossPages(pages);
+
+  // Vùng nội dung từng trang (bỏ số trang + banner/header/footer lặp lại) + dòng đã sắp theo
+  // thứ tự đọc.
   const content = pages.map((p) => {
     const lines = p.lines
       .map((l) => ({ ...l, text: l.text.normalize("NFC") }))
-      .filter((l) => l.text.trim().length > 0 && !isFurniture(l, p.height))
+      .filter((l) => l.text.trim().length > 0 && !isFurniture(l, p.height) && !repeatedLines.has(l.text.trim()))
       .sort((a, b) => a.y0 - b.y0 || a.x0 - b.x0);
     return {
       lines,
