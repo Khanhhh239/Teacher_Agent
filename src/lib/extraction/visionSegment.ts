@@ -81,12 +81,26 @@ export async function segmentFromVisionLabels(
       if (l.kind === "q" && typeof l.number === "number") {
         boundaries.push({ kind: "q", page: pageIndex, y0, number: l.number, text: line.text, line, matchLength: line.text.length, labelBoxX1: x1 });
       } else if (l.kind === "part") {
-        boundaries.push({ kind: "part", page: pageIndex, y0, number: 0, text: "PHẦN", line, matchLength: 0 });
+        // Nhãn thật ("PHẦN " + text) gán lại NGAY SAU KHI sắp xếp bên dưới — ở đây chỉ giữ chỗ.
+        boundaries.push({ kind: "part", page: pageIndex, y0, number: 0, text: "", line, matchLength: 0 });
       }
     }
   });
   // Đảm bảo đúng thứ tự đọc dù AI có lỡ trả không đúng thứ tự trong 1 trang.
   boundaries.sort((a, b) => a.page - b.page || a.y0 - b.y0);
+
+  // QUAN TRỌNG: mỗi nhãn "PHẦN" phải có text PHÂN BIỆT — groupKey khi xáo bài
+  // (seededShuffleByGroup) dựa trên đúng chuỗi part_label này. Lúc trước gán cứng cùng 1 chuỗi
+  // "PHẦN" cho mọi Phần → cả đề bị coi là 1 nhóm duy nhất, xáo lẫn các loại câu khác Phần vào
+  // nhau (lỗi thực tế đã gặp). Đánh số thứ tự (PHẦN 1, PHẦN 2...) để LUÔN phân biệt được, không
+  // phụ thuộc AI đọc đúng số La Mã hay không — ưu tiên đúng hơn đẹp.
+  let partSeq = 0;
+  for (const b of boundaries) {
+    if (b.kind === "part") {
+      partSeq += 1;
+      b.text = `PHẦN ${partSeq}`;
+    }
+  }
 
   if (boundaries.filter((b) => b.kind === "q").length === 0) {
     return { ok: false, reason: "AI không định vị được nhãn 'Câu N' nào trên các trang — thử lại hoặc kiểm tra file đề có bị mờ/nghiêng không" };
