@@ -61,7 +61,15 @@ export function findLabelCutoffX(pageChars: PageChar[], line: TextLine, labelLen
     .filter((ch) => ch.y0 <= midY && ch.y1 >= midY && ch.x0 >= line.x0 - 2 && ch.x0 <= line.x1 + 2)
     .sort((a, b) => a.x0 - b.x0);
   if (lineChars.length < labelLength) return null;
-  return lineChars[labelLength - 1].x1 + 1; // +1pt đệm an toàn
+  const labelEnd = lineChars[labelLength - 1].x1;
+  const proposed = labelEnd + 1; // +1pt đệm cơ bản
+  const nextChar = lineChars[labelLength]; // ký tự chữ cái đầu tiên của câu, ngay sau nhãn (nếu cùng dòng)
+  if (!nextChar) return proposed;
+  // Tuyệt đối không để điểm cắt chạm/vượt mép trái của chữ cái đầu câu — nếu nhãn và chữ đầu
+  // quá sát nhau, thà tẩy thiếu một chút viền nhãn còn hơn ăn mất chữ thật (đã gặp thực tế: mất
+  // hẳn chữ "T" đầu câu "Trong..." khi khoảng cách này quá hẹp).
+  const SAFETY_PT = 1.2;
+  return Math.max(labelEnd, Math.min(proposed, nextChar.x0 - SAFETY_PT));
 }
 
 export interface ImageQuestion {
@@ -140,9 +148,25 @@ export async function buildImageQuestions(
     return b.segments[0]?.page ?? -1;
   }
 
-  // Nới thêm vài mm phía trên mỗi mảnh cắt để không hụt mất phần trên của chữ/công thức
-  // (vd "ax+b" của Câu 5) khi ranh giới câu nằm sát đỉnh dòng chữ.
-  const TOP_PAD_PX = Math.round((2.5 / 25.4) * RENDER_DPI);
+  // Nới thêm tối đa ~2.5mm phía trên mỗi mảnh cắt để không hụt mất phần trên của chữ/công thức
+  // (vd "ax+b" của Câu 5) khi ranh giới câu nằm sát đỉnh dòng chữ — NHƯNG chỉ nới vào khoảng
+  // trắng THẬT SỰ còn trống phía trên (đo bằng lớp chữ), không bao giờ lấn vào dòng cuối của
+  // câu TRƯỚC (đã gặp thực tế: dính cả đáp án câu trước vào đầu ảnh câu sau khi 2 câu nằm sát
+  // nhau). Nhánh AI thị giác (PDF không có lớp chữ) không có dữ liệu để đo an toàn nên bỏ qua.
+  const TOP_PAD_PT = (2.5 / 25.4) * 72;
+  const TOP_SAFETY_PT = 1.5;
+
+  function maxSafeTopPadPt(page: number, y0: number): number {
+    if (usedVision) return 0;
+    const lines = pageLines[page]?.lines ?? [];
+    let nearestAboveY1 = -Infinity;
+    for (const l of lines) {
+      if (!l.text.trim() || l.y1 > y0 + 0.5) continue;
+      if (l.y1 > nearestAboveY1) nearestAboveY1 = l.y1;
+    }
+    if (nearestAboveY1 === -Infinity) return TOP_PAD_PT; // không có dòng nào phía trên — an toàn, nới hết mức
+    return Math.max(0, y0 - nearestAboveY1 - TOP_SAFETY_PT);
+  }
 
   const cropBlock = async (block: QuestionBlock): Promise<Buffer> => {
     const parts: Buffer[] = [];
@@ -153,7 +177,8 @@ export async function buildImageQuestions(
       const W = meta.width ?? 0;
       const H = meta.height ?? 0;
       const naturalTop = Math.round(s.y0 * scale);
-      const top = Math.max(0, Math.min(H - 1, naturalTop - TOP_PAD_PX));
+      const padPt = Math.min(TOP_PAD_PT, maxSafeTopPadPt(s.page, s.y0));
+      const top = Math.max(0, Math.min(H - 1, naturalTop - Math.round(padPt * scale)));
       const height = Math.max(8, Math.min(H - top, Math.round((s.y1 - s.y0) * scale) + (naturalTop - top)));
       parts.push(await sharp(png).extract({ left: 0, top, width: W, height }).png().toBuffer());
     }
