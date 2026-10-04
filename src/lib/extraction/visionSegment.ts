@@ -68,7 +68,17 @@ export async function segmentFromVisionLabels(
 ): Promise<SegmentResult> {
   if (pageImages.length === 0) return { ok: false, reason: "PDF không có trang nào" };
 
-  const perPageLabels = await Promise.all(pageImages.map((img) => detectPageLabels(img, warnings, deadline)));
+  // Gọi AI 2 LẦN ĐỘC LẬP cho mỗi trang rồi lấy lần tìm được NHIỀU nhãn "Câu" hơn — đã kiểm
+  // chứng thực tế: cùng 1 trang, cùng model, model có lúc bỏ sót vài nhãn (không phải lỗi đọc
+  // sai số mà là bỏ sót hẳn), 1 lần gọi lại thường vá được chỗ lần kia bỏ sót. Tốn gấp đôi lệnh
+  // gọi nhưng nhánh này vốn đã là dự phòng (chỉ chạy khi PDF không có lớp chữ), chấp nhận được.
+  const perPageLabels = await Promise.all(
+    pageImages.map(async (img) => {
+      const [a, b] = await Promise.all([detectPageLabels(img, warnings, deadline), detectPageLabels(img, warnings, deadline)]);
+      const countQ = (labels: RawVisionLabel[]) => labels.filter((l) => l.kind === "q").length;
+      return countQ(b) > countQ(a) ? b : a;
+    })
+  );
 
   const boundaries: Boundary[] = [];
   perPageLabels.forEach((labels, pageIndex) => {
