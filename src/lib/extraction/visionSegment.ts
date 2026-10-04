@@ -55,6 +55,69 @@ async function detectPageLabels(
   return data.labels ?? [];
 }
 
+const DETECTION_ATTEMPTS = 3;
+/** 2 nhãn cách nhau dưới ngần này (thang 0-1000 theo chiều cao trang) coi là "cùng 1 nhãn". */
+const CLUSTER_Y_TOLERANCE = 12;
+
+/**
+ * Gọi AI NHIỀU LẦN ĐỘC LẬP cho 1 trang rồi BIỂU QUYẾT theo vị trí — đã kiểm chứng thực tế là
+ * cách duy nhất vừa vá được nhãn bị BỎ SÓT (chỉ cần ≥1 lần trong N lần tìm thấy là có cơ hội
+ * được giữ) vừa loại được nhãn ẢO do model tự nhận bừa (một nhãn chỉ 1/N lần xuất hiện, không
+ * lần nào khác đồng ý vị trí đó, sẽ bị loại vì không đủ đa số). Cách trước đó (chọn nguyên 1
+ * lượt gọi tìm được NHIỀU nhãn hơn) vẫn dính lỗi: lượt đó có thể lẫn 1 nhãn ảo.
+ */
+async function detectPageLabelsByVoting(
+  pageImage: Buffer,
+  warnings: string[] | undefined,
+  deadline: number | undefined
+): Promise<RawVisionLabel[]> {
+  const attempts = await Promise.all(
+    Array.from({ length: DETECTION_ATTEMPTS }, () => detectPageLabels(pageImage, warnings, deadline))
+  );
+
+  function clusterAndVote(kind: "q" | "part"): [number, number, number, number][] {
+    const candidates: { runIdx: number; box: [number, number, number, number] }[] = [];
+    attempts.forEach((labels, runIdx) => {
+      for (const l of labels) {
+        if (l.kind === kind && Array.isArray(l.box_2d) && l.box_2d.length === 4) {
+          candidates.push({ runIdx, box: l.box_2d });
+        }
+      }
+    });
+    candidates.sort((a, b) => a.box[0] - b.box[0]);
+
+    const clusters: { items: typeof candidates; runs: Set<number> }[] = [];
+    for (const item of candidates) {
+      const last = clusters[clusters.length - 1];
+      const lastY = last?.items[last.items.length - 1]?.box[0];
+      if (last && lastY !== undefined && item.box[0] - lastY <= CLUSTER_Y_TOLERANCE && !last.runs.has(item.runIdx)) {
+        last.items.push(item);
+        last.runs.add(item.runIdx);
+      } else {
+        clusters.push({ items: [item], runs: new Set([item.runIdx]) });
+      }
+    }
+
+    const majority = Math.ceil(DETECTION_ATTEMPTS / 2);
+    const median = (nums: number[]) => {
+      const s = [...nums].sort((a, b) => a - b);
+      return s[Math.floor(s.length / 2)];
+    };
+    return clusters
+      .filter((c) => c.runs.size >= majority)
+      .map((c): [number, number, number, number] => [
+        median(c.items.map((i) => i.box[0])),
+        median(c.items.map((i) => i.box[1])),
+        median(c.items.map((i) => i.box[2])),
+        median(c.items.map((i) => i.box[3])),
+      ]);
+  }
+
+  const qBoxes = clusterAndVote("q").map((box): RawVisionLabel => ({ kind: "q", box_2d: box }));
+  const partBoxes = clusterAndVote("part").map((box): RawVisionLabel => ({ kind: "part", box_2d: box }));
+  return [...qBoxes, ...partBoxes].sort((a, b) => a.box_2d[0] - b.box_2d[0]);
+}
+
 /**
  * @param pageImages Ảnh render từng trang (PNG) — dùng CHUNG ảnh này cho cả việc định vị và
  * cắt câu sau đó, không cần render 2 lần.
@@ -68,17 +131,9 @@ export async function segmentFromVisionLabels(
 ): Promise<SegmentResult> {
   if (pageImages.length === 0) return { ok: false, reason: "PDF không có trang nào" };
 
-  // Gọi AI 2 LẦN ĐỘC LẬP cho mỗi trang rồi lấy lần tìm được NHIỀU nhãn "Câu" hơn — đã kiểm
-  // chứng thực tế: cùng 1 trang, cùng model, model có lúc bỏ sót vài nhãn (không phải lỗi đọc
-  // sai số mà là bỏ sót hẳn), 1 lần gọi lại thường vá được chỗ lần kia bỏ sót. Tốn gấp đôi lệnh
-  // gọi nhưng nhánh này vốn đã là dự phòng (chỉ chạy khi PDF không có lớp chữ), chấp nhận được.
-  const perPageLabels = await Promise.all(
-    pageImages.map(async (img) => {
-      const [a, b] = await Promise.all([detectPageLabels(img, warnings, deadline), detectPageLabels(img, warnings, deadline)]);
-      const countQ = (labels: RawVisionLabel[]) => labels.filter((l) => l.kind === "q").length;
-      return countQ(b) > countQ(a) ? b : a;
-    })
-  );
+  // Gọi AI 3 LẦN ĐỘC LẬP mỗi trang rồi biểu quyết theo vị trí (xem detectPageLabelsByVoting) —
+  // tốn gấp 3 lệnh gọi nhưng nhánh này vốn đã là dự phòng (chỉ chạy khi PDF không có lớp chữ).
+  const perPageLabels = await Promise.all(pageImages.map((img) => detectPageLabelsByVoting(img, warnings, deadline)));
 
   const boundaries: Boundary[] = [];
   perPageLabels.forEach((labels, pageIndex) => {
