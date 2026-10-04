@@ -14,16 +14,20 @@ import { buildBlocksFromBoundaries, type Boundary, type SegmentResult, type Text
 
 const VISION_LABEL_MODEL = "gemini-3.5-flash-lite";
 
+// Cố tình KHÔNG hỏi AI số thứ tự câu là mấy — chỉ hỏi VỊ TRÍ. Đã kiểm chứng thực tế: dù layout
+// đơn giản (1 cột), model vẫn có lúc đọc nhầm chữ số trên nhãn (vd lẫn "Câu 3" ra sau "Câu 6"),
+// làm hỏng cả bước kiểm tra liên tục. Số thứ tự thật được TỰ ĐÁNH bằng code theo đúng thứ tự
+// toạ độ (trên→dưới, trái→phải) sau khi định vị xong — loại bỏ hoàn toàn rủi ro đọc sai số.
 const LABEL_DETECT_PROMPT = `Ảnh đính kèm là 1 TRANG đề thi. Nhiệm vụ DUY NHẤT: tìm VỊ TRÍ (toạ độ) của:
 1. Mỗi nhãn MỞ ĐẦU một câu hỏi mới, dạng "Câu <số>." hoặc "Câu <số>:" hoặc "Câu <số>)" — nhãn này luôn nằm sát lề trái, ở đầu dòng. KHÔNG tính chữ "câu" xuất hiện giữa câu văn (vd "mỗi câu hỏi", "các câu sau").
 2. Mỗi tiêu đề phần thi, dạng "PHẦN <số La Mã>..." (vd "PHẦN I. Câu trắc nghiệm...").
 
-TUYỆT ĐỐI KHÔNG đọc, không chép lại, không diễn giải nội dung câu hỏi — chỉ xác định toạ độ của riêng cụm nhãn đó (vd chỉ khoanh đúng "Câu 5:" chứ không khoanh cả câu hỏi phía sau).
+TUYỆT ĐỐI KHÔNG đọc, không chép lại, không diễn giải nội dung câu hỏi, KHÔNG CẦN đọc số thứ tự ghi trên nhãn — chỉ cần xác định toạ độ của riêng cụm nhãn đó (vd chỉ khoanh đúng "Câu 5:" chứ không khoanh cả câu hỏi phía sau).
 
 Trả về DUY NHẤT 1 JSON, không markdown, không code fence, theo schema:
 {
   "labels": [
-    {"kind": "q", "number": 5, "box_2d": [120, 40, 145, 95]},
+    {"kind": "q", "box_2d": [120, 40, 145, 95]},
     {"kind": "part", "box_2d": [300, 30, 328, 420]}
   ]
 }
@@ -31,7 +35,6 @@ Trả về DUY NHẤT 1 JSON, không markdown, không code fence, theo schema:
 
 interface RawVisionLabel {
   kind: "q" | "part";
-  number?: number;
   box_2d: [number, number, number, number];
 }
 
@@ -77,28 +80,38 @@ export async function segmentFromVisionLabels(
       const y1 = (ymax / 1000) * height;
       const x0 = (xmin / 1000) * width;
       const x1 = (xmax / 1000) * width;
-      const line: TextLine = { text: l.kind === "q" ? `Câu ${l.number ?? "?"}.` : "PHẦN", x0, y0, x1, y1 };
-      if (l.kind === "q" && typeof l.number === "number") {
-        boundaries.push({ kind: "q", page: pageIndex, y0, number: l.number, text: line.text, line, matchLength: line.text.length, labelBoxX1: x1 });
+      // number/text thật gán lại NGAY SAU KHI sắp xếp bên dưới — ở đây chỉ giữ chỗ toạ độ.
+      const line: TextLine = { text: "", x0, y0, x1, y1 };
+      if (l.kind === "q") {
+        boundaries.push({ kind: "q", page: pageIndex, y0, number: 0, text: "", line, matchLength: 0, labelBoxX1: x1 });
       } else if (l.kind === "part") {
-        // Nhãn thật ("PHẦN " + text) gán lại NGAY SAU KHI sắp xếp bên dưới — ở đây chỉ giữ chỗ.
         boundaries.push({ kind: "part", page: pageIndex, y0, number: 0, text: "", line, matchLength: 0 });
       }
     }
   });
-  // Đảm bảo đúng thứ tự đọc dù AI có lỡ trả không đúng thứ tự trong 1 trang.
+  // Sắp đúng thứ tự đọc (trên → dưới mỗi trang, theo đúng thứ tự trang).
   boundaries.sort((a, b) => a.page - b.page || a.y0 - b.y0);
 
-  // QUAN TRỌNG: mỗi nhãn "PHẦN" phải có text PHÂN BIỆT — groupKey khi xáo bài
-  // (seededShuffleByGroup) dựa trên đúng chuỗi part_label này. Lúc trước gán cứng cùng 1 chuỗi
-  // "PHẦN" cho mọi Phần → cả đề bị coi là 1 nhóm duy nhất, xáo lẫn các loại câu khác Phần vào
-  // nhau (lỗi thực tế đã gặp). Đánh số thứ tự (PHẦN 1, PHẦN 2...) để LUÔN phân biệt được, không
-  // phụ thuộc AI đọc đúng số La Mã hay không — ưu tiên đúng hơn đẹp.
+  // QUAN TRỌNG: KHÔNG dùng số AI đọc được (nếu có) — đã kiểm chứng thực tế model đôi khi đọc
+  // nhầm chữ số ngay cả với layout 1 cột đơn giản (vd trả về thứ tự "Câu 3" lẫn sau "Câu 6"),
+  // làm hỏng bước kiểm tra liên tục bên dưới dù định vị TOẠ ĐỘ vẫn đúng. Tự đánh số theo đúng
+  // thứ tự xuất hiện (reset về 1 sau mỗi "PHẦN") loại bỏ hoàn toàn rủi ro đọc sai chữ số — và
+  // tương tự, mỗi "PHẦN" được gán nhãn phân biệt PHẦN 1/2/3 theo thứ tự, không phụ thuộc AI đọc
+  // đúng số La Mã (lỗi khác đã gặp: mọi Phần bị gán cùng 1 chuỗi, khiến xáo bài lẫn lộn giữa
+  // các Phần).
   let partSeq = 0;
+  let qSeqInPart = 0;
   for (const b of boundaries) {
     if (b.kind === "part") {
       partSeq += 1;
+      qSeqInPart = 0;
       b.text = `PHẦN ${partSeq}`;
+    } else {
+      qSeqInPart += 1;
+      b.number = qSeqInPart;
+      b.text = `Câu ${qSeqInPart}.`;
+      b.line.text = b.text;
+      b.matchLength = b.text.length;
     }
   }
 
