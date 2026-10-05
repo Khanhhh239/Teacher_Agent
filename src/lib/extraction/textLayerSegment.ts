@@ -51,6 +51,8 @@ export interface QuestionBlock {
    * cạnh phải (đơn vị pt) của CHÍNH nhãn "Câu N" do AI khoanh vùng — dùng làm điểm cắt tẩy nhãn
    * khi không có toạ độ từng ký tự để tính chính xác hơn. */
   labelBoxX1?: number;
+  /** Mép bắt đầu nội dung thật do AI xác nhận; dùng để từ chối bbox nhãn ăn vào chữ. */
+  labelContentStartX?: number;
 }
 
 export type SegmentResult =
@@ -77,6 +79,7 @@ export interface Boundary {
   line: TextLine;
   matchLength: number;
   labelBoxX1?: number;
+  labelContentStartX?: number;
 }
 
 /**
@@ -168,7 +171,7 @@ export function buildBlocksFromBoundaries(
         }
       }
     }
-    blocks.push({ number: a.number, part: currentPart, segments, labelLine: a.line, labelLength: a.matchLength, labelBoxX1: a.labelBoxX1 });
+    blocks.push({ number: a.number, part: currentPart, segments, labelLine: a.line, labelLength: a.matchLength, labelBoxX1: a.labelBoxX1, labelContentStartX: a.labelContentStartX });
   }
 
   return { ok: true, blocks };

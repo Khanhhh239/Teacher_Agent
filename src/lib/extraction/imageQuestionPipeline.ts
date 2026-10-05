@@ -132,14 +132,14 @@ export async function buildImageQuestions(
           const width = Math.round(cutX * scale);
           return `<rect x="0" y="${top}" width="${width}" height="${height}" fill="white"/>`;
         }
-        // Nhánh ảnh dùng bbox đo trên lưới 20/1000. Không dùng vùng cố định rộng (trước đây
-        // là 52pt), vì vùng đó đã ăn mất chữ đầu câu trong de1. Chỉ chừa đệm 0.8pt quanh
-        // đúng bbox nhãn; lùi mép phải thêm 8pt để không ăn vào ký tự đầu câu khi model
-        // khoanh hơi rộng (đã quan sát de1: mất "T" của Trong và "C" của Cho).
+        // Nhánh ảnh dùng chính label_box AI trả về. Không có độ rộng, số câu hay khoảng lùi
+        // hardcode: mỗi loại nhãn/kiểu chữ có thể khác nhau.
         const labelX0 = Math.max(0, b.labelLine.x0);
-        const labelX1 = Math.min(Math.max(cutX - 8, labelX0 + 10), labelX0 + 40);
-        const left = Math.max(0, Math.round((labelX0 - 0.8) * scale));
-        const right = Math.round((labelX1 + 0.8) * scale);
+        const labelX1 = b.labelBoxX1 ?? cutX;
+        if (b.labelContentStartX !== undefined && labelX1 >= b.labelContentStartX) return null;
+        if (!(labelX1 > labelX0)) return null;
+        const left = Math.round(labelX0 * scale);
+        const right = Math.round(labelX1 * scale);
         return `<rect x="${left}" y="${top}" width="${Math.max(1, right - left)}" height="${height}" fill="white"/>`;
       })
       .filter((x): x is string => x !== null);

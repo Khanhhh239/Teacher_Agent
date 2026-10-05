@@ -31,16 +31,19 @@ TUYỆT ĐỐI KHÔNG đọc, không chép lại, không diễn giải nội dun
 Trả về DUY NHẤT 1 JSON, không markdown, không code fence, theo schema:
 {
   "labels": [
-    {"kind": "q", "box_2d": [120, 40, 145, 95]},
+    {"kind": "q", "label_box": [120, 40, 145, 95], "content_start_x": 112},
     {"kind": "part", "box_2d": [300, 30, 328, 420]}
   ]
 }
-"box_2d" là [ymin, xmin, ymax, xmax] CHUẨN HÓA theo thang 0-1000 của ảnh gốc. Hãy khoanh SÁT chữ nhãn, không lấy ký tự đầu của nội dung ngay sau nhãn.
+"label_box" là [ymin, xmin, ymax, xmax] CHUẨN HÓA theo thang 0-1000 của ảnh gốc và phải bao trọn TOÀN BỘ nhãn in cũ, gồm cả chữ "Câu", số câu và dấu câu cuối. Không được lấy ký tự đầu của nội dung vào label_box.
+"content_start_x" là tọa độ x chuẩn hóa của nét chữ đầu tiên thuộc nội dung câu hỏi sau nhãn; nếu nhãn và nội dung nằm cùng dòng thì content_start_x phải lớn hơn label_box.xmax. Nếu không có nội dung cùng dòng, vẫn trả mép phải thực tế của nhãn.
 Sắp xếp các phần tử theo đúng thứ tự xuất hiện trên trang, từ trên xuống dưới. Nếu trang không có nhãn nào, trả {"labels": []}.`;
 
 interface RawVisionLabel {
   kind: "q" | "part";
-  box_2d: [number, number, number, number];
+  label_box?: [number, number, number, number];
+  box_2d?: [number, number, number, number];
+  content_start_x?: number;
 }
 
 async function detectPageLabels(
@@ -81,12 +84,13 @@ async function detectPageLabelsByVoting(
     Array.from({ length: detectionAttempts }, () => detectPageLabels(pageImage, warnings, deadline))
   );
 
-  function clusterAndVote(kind: "q" | "part"): [number, number, number, number][] {
-    const candidates: { runIdx: number; box: [number, number, number, number] }[] = [];
+  function clusterAndVote(kind: "q" | "part"): { box: [number, number, number, number]; contentStartX?: number }[] {
+    const candidates: { runIdx: number; box: [number, number, number, number]; contentStartX?: number }[] = [];
     attempts.forEach((labels, runIdx) => {
       for (const l of labels) {
-        if (l.kind === kind && Array.isArray(l.box_2d) && l.box_2d.length === 4) {
-          candidates.push({ runIdx, box: l.box_2d });
+        const box = l.label_box ?? l.box_2d;
+        if (l.kind === kind && Array.isArray(box) && box.length === 4) {
+          candidates.push({ runIdx, box, contentStartX: l.content_start_x });
         }
       }
     });
@@ -113,17 +117,22 @@ async function detectPageLabelsByVoting(
     };
     return clusters
       .filter((c) => c.runs.size >= majority)
-      .map((c): [number, number, number, number] => [
-        median(c.items.map((i) => i.box[0])),
-        median(c.items.map((i) => i.box[1])),
-        median(c.items.map((i) => i.box[2])),
-        median(c.items.map((i) => i.box[3])),
-      ]);
+      .map((c) => ({
+        box: [
+          median(c.items.map((i) => i.box[0])),
+          median(c.items.map((i) => i.box[1])),
+          median(c.items.map((i) => i.box[2])),
+          median(c.items.map((i) => i.box[3])),
+        ] as [number, number, number, number],
+        contentStartX: c.items.some((i) => Number.isFinite(i.contentStartX))
+          ? median(c.items.filter((i) => Number.isFinite(i.contentStartX)).map((i) => i.contentStartX as number))
+          : undefined,
+      }));
   }
 
-  const qBoxes = clusterAndVote("q").map((box): RawVisionLabel => ({ kind: "q", box_2d: box }));
-  const partBoxes = clusterAndVote("part").map((box): RawVisionLabel => ({ kind: "part", box_2d: box }));
-  return [...qBoxes, ...partBoxes].sort((a, b) => a.box_2d[0] - b.box_2d[0]);
+  const qBoxes = clusterAndVote("q").map((x): RawVisionLabel => ({ kind: "q", label_box: x.box, content_start_x: x.contentStartX }));
+  const partBoxes = clusterAndVote("part").map((x): RawVisionLabel => ({ kind: "part", label_box: x.box, content_start_x: x.contentStartX }));
+  return [...qBoxes, ...partBoxes].sort((a, b) => (a.label_box ?? a.box_2d ?? [0])[0] - (b.label_box ?? b.box_2d ?? [0])[0]);
 }
 
 /**
@@ -150,8 +159,9 @@ export async function segmentFromVisionLabels(
   perPageLabels.forEach((labels, pageIndex) => {
     const { width, height } = pageSizesPt[pageIndex];
     for (const l of labels) {
-      if (!Array.isArray(l.box_2d) || l.box_2d.length !== 4) continue;
-      const [ymin, xmin, ymax, xmax] = l.box_2d;
+      const box = l.label_box ?? l.box_2d;
+      if (!Array.isArray(box) || box.length !== 4) continue;
+      const [ymin, xmin, ymax, xmax] = box;
       const y0 = (ymin / 1000) * height;
       const y1 = (ymax / 1000) * height;
       const x0 = (xmin / 1000) * width;
@@ -159,7 +169,8 @@ export async function segmentFromVisionLabels(
       // number/text thật gán lại NGAY SAU KHI sắp xếp bên dưới — ở đây chỉ giữ chỗ toạ độ.
       const line: TextLine = { text: "", x0, y0, x1, y1 };
       if (l.kind === "q") {
-        boundaries.push({ kind: "q", page: pageIndex, y0, number: 0, text: "", line, matchLength: 0, labelBoxX1: x1 });
+        const contentStartX = Number.isFinite(l.content_start_x) ? (Number(l.content_start_x) / 1000) * width : undefined;
+        boundaries.push({ kind: "q", page: pageIndex, y0, number: 0, text: "", line, matchLength: 0, labelBoxX1: x1, labelContentStartX: contentStartX });
       } else if (l.kind === "part") {
         boundaries.push({ kind: "part", page: pageIndex, y0, number: 0, text: "", line, matchLength: 0 });
       }
