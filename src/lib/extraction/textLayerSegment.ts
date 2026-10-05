@@ -54,7 +54,7 @@ export interface QuestionBlock {
 }
 
 export type SegmentResult =
-  | { ok: true; title: string; blocks: QuestionBlock[] }
+  | { ok: true; title: string; blocks: QuestionBlock[]; furnitureBoxes?: { page: number; x0: number; y0: number; x1: number; y1: number }[] }
   | { ok: false; reason: string };
 
 const Q_ANCHOR = /^\s*Câu\s*(\d+)\s*[.:)]/;
