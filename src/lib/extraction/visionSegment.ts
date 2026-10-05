@@ -19,9 +19,10 @@ const VISION_LABEL_MODEL = "gemini-3.5-flash-lite";
 // đơn giản (1 cột), model vẫn có lúc đọc nhầm chữ số trên nhãn (vd lẫn "Câu 3" ra sau "Câu 6"),
 // làm hỏng cả bước kiểm tra liên tục. Số thứ tự thật được TỰ ĐÁNH bằng code theo đúng thứ tự
 // toạ độ (trên→dưới, trái→phải) sau khi định vị xong — loại bỏ hoàn toàn rủi ro đọc sai số.
-const LABEL_DETECT_PROMPT = `Ảnh đính kèm là 1 TRANG đề thi có một lớp LƯỚI TOẠ ĐỘ màu đỏ phủ lên ảnh.
+const LABEL_DETECT_PROMPT = `Ảnh đính kèm là 1 TRANG đề thi có một lớp LƯỚI TOẠ ĐỘ màu đỏ rất nhạt phủ lên ảnh.
 Phần lề trắng bên ngoài ảnh chỉ chứa số của lưới; KHÔNG được coi số/lưới ở lề là nội dung đề.
 Các vạch nhỏ cách nhau 20 đơn vị trên thang 0-1000; số lớn được ghi mỗi 100 đơn vị.
+LƯỚI, vạch đỏ và các con số ở lề là lớp phụ trợ, phải bỏ qua hoàn toàn khi tìm chữ đề.
 Toạ độ phải đo trên VÙNG ẢNH ĐỀ GỐC bên trong khung đỏ, không tính phần lề trắng.
 
 Nhiệm vụ DUY NHẤT: tìm VỊ TRÍ (toạ độ) của:
@@ -146,7 +147,7 @@ export async function segmentFromVisionLabels(
   // việc chờ vô hạn, nhưng không hạ chất lượng định vị khi người dùng chấp nhận chờ lâu hơn.
   // AI nhìn bản sao có lưới chi tiết 20/1000 (xấp xỉ 2pt trên trang A4), còn mọi crop
   // và mọi thao tác xoá nhãn phía sau vẫn thực hiện trên ảnh gốc không có lưới.
-  const gridPages = await Promise.all(pageImages.map((img) => buildGridOverlay(img, { step: 20, labelEvery: 100 })));
+  const gridPages = await Promise.all(pageImages.map((img) => buildGridOverlay(img, { step: 20, labelEvery: 100, lineAlpha: 0.08 })));
   const perPageLabels = await Promise.all(
     gridPages.map((grid) => detectPageLabelsByVoting(grid.png, warnings, deadline, detectionAttempts))
   );
