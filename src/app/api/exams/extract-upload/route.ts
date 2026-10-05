@@ -17,12 +17,31 @@ export const maxDuration = 280;
 
 const IMAGE_EXTS = new Set(["jpg", "jpeg", "png", "webp"]);
 
+type ExtractFailureCode = "gemini_quota" | "deadline" | "gemini_error" | "internal_error";
+
+function classifyExtractFailure(error: unknown): ExtractFailureCode {
+  const message = error instanceof Error ? error.message : String(error);
+  const lower = message.toLowerCase();
+  if (/(429|quota|resource_exhausted|rate limit)/i.test(lower)) return "gemini_quota";
+  if (/(deadline|timeout|timed out|hết thời gian)/i.test(lower)) return "deadline";
+  if (/(gemini|recitation|generatecontent)/i.test(lower)) return "gemini_error";
+  return "internal_error";
+}
+
+function extractFailureMessage(code: ExtractFailureCode): string {
+  if (code === "gemini_quota") return "Gemini đang hết hạn mức hoặc bị giới hạn tần suất. Vui lòng chờ rồi thử lại.";
+  if (code === "deadline") return "Xử lý đề vượt thời gian cho phép của server. Hãy thử lại hoặc tách đề thành phần nhỏ hơn.";
+  if (code === "gemini_error") return "Gemini gặp lỗi khi đọc file. Vui lòng thử lại.";
+  return "Lỗi nội bộ khi xử lý file. Vui lòng thử lại.";
+}
+
 function extOf(filename: string): string {
   return filename.split(".").pop()?.toLowerCase() ?? "";
 }
 
 export async function POST(request: Request) {
   const startedAt = Date.now();
+  const requestId = crypto.randomUUID();
   const ANSWER_DEADLINE = startedAt + 260_000;
   const supabase = await createClient();
   const {
@@ -119,7 +138,17 @@ export async function POST(request: Request) {
   // Cho nhánh PDF image-only đủ thời gian chạy 3 lượt voting/trang; vẫn nằm dưới
   // maxDuration=280s và chừa 20s cuối cho dọn dẹp + trả response.
   const EXAM_SEGMENT_DEADLINE = startedAt + 200_000;
-  const imageResult = await buildImageQuestions(buffer, { warnings, deadline: EXAM_SEGMENT_DEADLINE });
+  console.info(JSON.stringify({ event: "extract_upload_stage_start", requestId, stage: "exam_segmentation", examBytes: buffer.length }));
+  let imageResult;
+  try {
+    imageResult = await buildImageQuestions(buffer, { warnings, deadline: EXAM_SEGMENT_DEADLINE });
+    console.info(JSON.stringify({ event: "extract_upload_stage_done", requestId, stage: "exam_segmentation", elapsedMs: Date.now() - startedAt, usedVision: imageResult.ok && imageResult.usedVision }));
+  } catch (error) {
+    const code = classifyExtractFailure(error);
+    console.error(JSON.stringify({ event: "extract_upload_failed", requestId, stage: "exam_segmentation", code, elapsedMs: Date.now() - startedAt, error: error instanceof Error ? error.message.slice(0, 1000) : String(error).slice(0, 1000) }));
+    await cleanupTmp();
+    return NextResponse.json({ error: extractFailureMessage(code), code, request_id: requestId }, { status: code === "gemini_quota" ? 503 : 500 });
+  }
   if (!imageResult.ok) {
     await cleanupTmp();
     return NextResponse.json(
@@ -132,6 +161,7 @@ export async function POST(request: Request) {
   // 2) Đọc file đáp án (vẫn cần AI — có thể là lời giải dài, ảnh chụp, hay bảng ngắn gọn).
   let answerKey;
   try {
+    console.info(JSON.stringify({ event: "extract_upload_stage_start", requestId, stage: "answer_key", answerBytes: answerBuffer.length }));
     if (answerExt === "docx") {
       const result = await extractDocx(answerBuffer);
       answerKey = await extractAnswerKeyFromText(result.text, warnings);
@@ -143,10 +173,12 @@ export async function POST(request: Request) {
     if (answerKey.length === 0) {
       warnings.push("Không đọc được đáp án nào từ file đáp án — giáo viên cần tự điền đáp án ở bước duyệt.");
     }
+    console.info(JSON.stringify({ event: "extract_upload_stage_done", requestId, stage: "answer_key", elapsedMs: Date.now() - startedAt, answerCount: answerKey.length }));
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
+    const code = classifyExtractFailure(e);
+    console.error(JSON.stringify({ event: "extract_upload_failed", requestId, stage: "answer_key", code, elapsedMs: Date.now() - startedAt, error: e instanceof Error ? e.message.slice(0, 1000) : String(e).slice(0, 1000) }));
     await cleanupTmp();
-    return NextResponse.json({ error: `Lỗi xử lý file đáp án: ${message}` }, { status: 500 });
+    return NextResponse.json({ error: extractFailureMessage(code), code, request_id: requestId }, { status: code === "gemini_quota" ? 503 : 500 });
   }
 
   // 3) Ghép câu hỏi với đáp án — loại câu (trắc nghiệm/đúng-sai/điền ngắn) và đáp án đúng lấy
@@ -233,5 +265,6 @@ export async function POST(request: Request) {
   }
 
   await cleanupTmp();
-  return NextResponse.json({ exam_id: exam.id, question_count: questionCount, warnings });
+  console.info(JSON.stringify({ event: "extract_upload_done", requestId, elapsedMs: Date.now() - startedAt, examId: exam.id, questionCount }));
+  return NextResponse.json({ exam_id: exam.id, question_count: questionCount, warnings, request_id: requestId });
 }

@@ -309,6 +309,7 @@ async function callGeminiRaw(model: string, parts: unknown[], warnings?: string[
         const data = (await res.json()) as any; // eslint-disable-line @typescript-eslint/no-explicit-any
         if (!res.ok) {
           const err = new Error(`Gemini lỗi ${res.status}: ${JSON.stringify(data).slice(0, 300)}`) as Error & { retryAfterMs?: number };
+          console.warn(JSON.stringify({ event: "gemini_call_failed", model, status: res.status, attempt: attempt + 1, retryAfterMs: (err as Error & { retryAfterMs?: number }).retryAfterMs ?? null }));
           // Lỗi 429 của Gemini kèm RetryInfo.retryDelay (vd "23s") = thời gian Google yêu cầu
           // chờ để hạn mức theo phút được làm mới — chờ đúng khoảng đó hiệu quả hơn hẳn chờ
           // cứng 2s/5s/10s (quá ngắn, thử lại vẫn 429 rồi bỏ cuộc).
@@ -332,7 +333,10 @@ async function callGeminiRaw(model: string, parts: unknown[], warnings?: string[
       } catch (e) {
         lastError = e instanceof Error ? e : new Error(String(e));
         const transient = isTransientError(lastError.message);
-        if (!transient || attempt === maxAttempts - 1) throw lastError;
+        if (!transient || attempt === maxAttempts - 1) {
+          console.error(JSON.stringify({ event: "gemini_call_exhausted", model, attempts: attempt + 1, error: lastError.message.slice(0, 1000) }));
+          throw lastError;
+        }
         const retryWarning = "Gemini phản hồi chậm/quá tải tạm thời, hệ thống đã tự thử lại.";
         if (warnings && !warnings.includes(retryWarning)) warnings.push(retryWarning);
         const retryAfterMs = (lastError as Error & { retryAfterMs?: number }).retryAfterMs;

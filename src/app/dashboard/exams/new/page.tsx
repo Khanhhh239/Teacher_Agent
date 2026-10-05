@@ -150,7 +150,7 @@ export default function NewExamPage() {
       // là trang lỗi HTML/text thay vì JSON — tránh để JSON.parse ném lỗi "Unexpected
       // token..." khó hiểu, hiện thông báo rõ ràng thay thế.
       const rawText = await res.text();
-      let data: { error?: string; warnings?: string[]; exam_id?: string } = {};
+      let data: { error?: string; code?: string; request_id?: string; warnings?: string[]; exam_id?: string } = {};
       try {
         data = JSON.parse(rawText);
       } catch {
@@ -164,7 +164,8 @@ export default function NewExamPage() {
       }
 
       if (!res.ok) {
-        setError(data.error ?? "Có lỗi xảy ra khi xử lý file");
+        const diagnostic = [data.code, data.request_id ? `mã yêu cầu ${data.request_id}` : null].filter(Boolean).join(" — ");
+        setError(`${data.error ?? "Có lỗi xảy ra khi xử lý file"}${diagnostic ? ` (${diagnostic})` : ""}`);
         setBusy(false);
         return;
       }
