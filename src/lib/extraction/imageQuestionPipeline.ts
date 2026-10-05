@@ -108,8 +108,8 @@ export async function buildImageQuestions(
   if (!seg.ok) return { ok: false, reason: seg.reason };
 
   const sharp = (await import("sharp")).default;
-  // Toạ độ từng ký tự chỉ có ý nghĩa ở nhánh lớp chữ thật — nhánh AI thị giác dùng labelBoxX1
-  // (toạ độ khung nhãn do AI khoanh) làm điểm cắt tẩy nhãn, xem vòng lặp composite bên dưới.
+  // Toạ độ từng ký tự chỉ có ý nghĩa ở nhánh lớp chữ thật. Nhánh AI thị giác không được phép
+  // dùng nguyên x1 của bbox để tẩy từ mép trái: model đôi khi khoanh rộng sang chữ đầu câu.
   const pageChars = usedVision ? [] : await extractPageChars(pdf);
   const scale = RENDER_DPI / 72;
 
@@ -128,8 +128,17 @@ export async function buildImageQuestions(
         if (cutX === null) return null;
         const top = Math.max(0, Math.round(b.labelLine.y0 * scale) - 2);
         const height = Math.round((b.labelLine.y1 - b.labelLine.y0) * scale) + 4;
-        const width = Math.round(cutX * scale);
-        return `<rect x="0" y="${top}" width="${width}" height="${height}" fill="white"/>`;
+        if (!usedVision) {
+          const width = Math.round(cutX * scale);
+          return `<rect x="0" y="${top}" width="${width}" height="${height}" fill="white"/>`;
+        }
+        // AI chỉ cần tẩy cụm "Câu N." ở vị trí bbox.x0. Giới hạn 52pt bảo vệ ký tự đầu
+        // của nội dung ngay cả khi bbox.x1 bị model kéo dài sang cả dòng câu hỏi.
+        const labelX0 = Math.max(0, b.labelLine.x0);
+        const labelX1 = Math.min(Math.max(cutX, labelX0 + 28), labelX0 + 52);
+        const left = Math.max(0, Math.round((labelX0 - 2) * scale));
+        const right = Math.round(labelX1 * scale);
+        return `<rect x="${left}" y="${top}" width="${Math.max(1, right - left)}" height="${height}" fill="white"/>`;
       })
       .filter((x): x is string => x !== null);
     if (rects.length === 0) {
