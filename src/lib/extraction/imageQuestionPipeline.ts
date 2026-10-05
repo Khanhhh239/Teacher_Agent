@@ -18,6 +18,7 @@
 import type { AnswerKeyEntry } from "./llmClient";
 import { segmentFromLines, type QuestionBlock, type TextLine } from "./textLayerSegment";
 import { extractPageLines } from "./pdfTextLayer";
+import { removeRepeatedBanners, renderPdfPages } from "./pdfRender";
 
 export { extractPageLines };
 
@@ -90,8 +91,7 @@ export async function buildImageQuestions(
   opts: { warnings?: string[]; deadline?: number } = {}
 ): Promise<{ ok: true; title: string; questions: ImageQuestion[]; usedVision: boolean } | { ok: false; reason: string }> {
   const pageLines = await extractPageLines(pdf);
-  const { renderPdfPages } = await import("./pdfRender");
-  const rawPagePngs = renderPdfPages(pdf, RENDER_DPI);
+  const rawPagePngs = await removeRepeatedBanners(renderPdfPages(pdf, RENDER_DPI));
 
   let seg = segmentFromLines(pageLines);
   let usedVision = false;

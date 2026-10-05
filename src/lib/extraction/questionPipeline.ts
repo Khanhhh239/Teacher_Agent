@@ -14,6 +14,7 @@ import { callGeminiWithImage, extractJson, MARKER_CHAR, stripMarkers } from "./l
 import { waitForSlot } from "./rateLimiter";
 import { segmentFromLines, type PageLines, type QuestionBlock } from "./textLayerSegment";
 import { extractPageLines } from "./pdfTextLayer";
+import { removeRepeatedBanners, renderPdfPages } from "./pdfRender";
 import {
   checkAgainstLayer,
   describeLayerCheck,
@@ -120,8 +121,7 @@ export async function runQuestionPipeline(
   }
 
   const sharp = (await import("sharp")).default;
-  const { renderPdfPages } = await import("./pdfRender");
-  const pagePngs = renderPdfPages(pdf, RENDER_DPI);
+  const pagePngs = await removeRepeatedBanners(renderPdfPages(pdf, RENDER_DPI));
   const scale = RENDER_DPI / 72;
 
   const cropBlock = async (block: QuestionBlock): Promise<Buffer> => {
