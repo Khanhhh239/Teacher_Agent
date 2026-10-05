@@ -134,10 +134,10 @@ export async function buildImageQuestions(
         }
         // Nhánh ảnh dùng bbox đo trên lưới 20/1000. Không dùng vùng cố định rộng (trước đây
         // là 52pt), vì vùng đó đã ăn mất chữ đầu câu trong de1. Chỉ chừa đệm 0.8pt quanh
-        // đúng bbox nhãn; lùi mép phải thêm 3pt để không ăn vào ký tự đầu câu khi model
+        // đúng bbox nhãn; lùi mép phải thêm 8pt để không ăn vào ký tự đầu câu khi model
         // khoanh hơi rộng (đã quan sát de1: mất "T" của Trong và "C" của Cho).
         const labelX0 = Math.max(0, b.labelLine.x0);
-        const labelX1 = Math.min(Math.max(cutX - 3, labelX0 + 10), labelX0 + 44);
+        const labelX1 = Math.min(Math.max(cutX - 8, labelX0 + 10), labelX0 + 40);
         const left = Math.max(0, Math.round((labelX0 - 0.8) * scale));
         const right = Math.round((labelX1 + 0.8) * scale);
         return `<rect x="${left}" y="${top}" width="${Math.max(1, right - left)}" height="${height}" fill="white"/>`;
