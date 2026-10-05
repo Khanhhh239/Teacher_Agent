@@ -1,0 +1,5 @@
+file/
+scripts/_tmp_*.mjs
+scripts/_tmp_*.png
+scripts/_tmp_*.json
+docs/
