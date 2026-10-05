@@ -38,7 +38,10 @@ export async function removeRepeatedBanners(pagePngs: Buffer[]): Promise<Buffer[
   type Band = { start: number; end: number; xStart: number };
   const bandsByPage: Band[][] = decoded.map(({ data, width, height, channels }) => {
     const rows: number[] = [];
-    for (let y = Math.floor(height * 0.8); y < height; y++) {
+    // Một số PDF đặt banner ở khoảng 70-80% trang, không hẳn sát chân trang. Quét từ
+    // 55% để bắt đủ các dải đó; phía dưới vẫn phải lặp ở ít nhất 2 trang mới được che,
+    // nên hình minh họa màu xanh chỉ xuất hiện ở một câu không bị ảnh hưởng.
+    for (let y = Math.floor(height * 0.55); y < height; y++) {
       let bluePixels = 0;
       for (let x = Math.floor(width * 0.5); x < width; x++) {
         const i = (y * width + x) * channels;
