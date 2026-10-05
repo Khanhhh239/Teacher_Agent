@@ -55,7 +55,7 @@ async function detectPageLabels(
   return data.labels ?? [];
 }
 
-const DETECTION_ATTEMPTS = 3;
+const DEFAULT_DETECTION_ATTEMPTS = 3;
 /** 2 nhãn cách nhau dưới ngần này (thang 0-1000 theo chiều cao trang) coi là "cùng 1 nhãn". */
 const CLUSTER_Y_TOLERANCE = 12;
 
@@ -69,10 +69,11 @@ const CLUSTER_Y_TOLERANCE = 12;
 async function detectPageLabelsByVoting(
   pageImage: Buffer,
   warnings: string[] | undefined,
-  deadline: number | undefined
+  deadline: number | undefined,
+  detectionAttempts: number
 ): Promise<RawVisionLabel[]> {
   const attempts = await Promise.all(
-    Array.from({ length: DETECTION_ATTEMPTS }, () => detectPageLabels(pageImage, warnings, deadline))
+    Array.from({ length: detectionAttempts }, () => detectPageLabels(pageImage, warnings, deadline))
   );
 
   function clusterAndVote(kind: "q" | "part"): [number, number, number, number][] {
@@ -98,7 +99,9 @@ async function detectPageLabelsByVoting(
       }
     }
 
-    const majority = Math.ceil(DETECTION_ATTEMPTS / 2);
+    // Với 3 lượt cần ít nhất 2 lượt đồng ý. Nhánh fallback vẫn chịu được cấu hình ít lượt hơn
+    // nếu sau này cần tối ưu deadline lần nữa.
+    const majority = detectionAttempts >= 3 ? 2 : 1;
     const median = (nums: number[]) => {
       const s = [...nums].sort((a, b) => a - b);
       return s[Math.floor(s.length / 2)];
@@ -131,9 +134,12 @@ export async function segmentFromVisionLabels(
 ): Promise<SegmentResult> {
   if (pageImages.length === 0) return { ok: false, reason: "PDF không có trang nào" };
 
-  // Gọi AI 3 LẦN ĐỘC LẬP mỗi trang rồi biểu quyết theo vị trí (xem detectPageLabelsByVoting) —
-  // tốn gấp 3 lệnh gọi nhưng nhánh này vốn đã là dự phòng (chỉ chạy khi PDF không có lớp chữ).
-  const perPageLabels = await Promise.all(pageImages.map((img) => detectPageLabelsByVoting(img, warnings, deadline)));
+  const detectionAttempts = DEFAULT_DETECTION_ATTEMPTS;
+  // Gọi AI 3 lượt độc lập mỗi trang rồi biểu quyết theo vị trí. Deadline của route vẫn chặn
+  // việc chờ vô hạn, nhưng không hạ chất lượng định vị khi người dùng chấp nhận chờ lâu hơn.
+  const perPageLabels = await Promise.all(
+    pageImages.map((img) => detectPageLabelsByVoting(img, warnings, deadline, detectionAttempts))
+  );
 
   const boundaries: Boundary[] = [];
   perPageLabels.forEach((labels, pageIndex) => {

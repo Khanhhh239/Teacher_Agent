@@ -12,14 +12,21 @@ export async function extractPageLines(pdf: Buffer): Promise<PageLines[]> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const json = JSON.parse(page.toStructuredText("preserve-whitespace").asJSON()) as any;
     const lines: PageLines["lines"] = [];
+    const imageBlocks: PageLines["imageBlocks"] = [];
     for (const block of json.blocks ?? []) {
-      if (block.type === "image") continue;
+      if (block.type === "image") {
+        const b = block.bbox;
+        if (b && [b.x, b.y, b.w, b.h].every((value) => Number.isFinite(value))) {
+          imageBlocks.push({ x0: b.x, y0: b.y, x1: b.x + b.w, y1: b.y + b.h });
+        }
+        continue;
+      }
       for (const line of block.lines ?? []) {
         const b = line.bbox;
         lines.push({ text: String(line.text ?? ""), x0: b.x, y0: b.y, x1: b.x + b.w, y1: b.y + b.h });
       }
     }
-    pages.push({ width: bx1 - bx0, height: by1 - by0, lines });
+    pages.push({ width: bx1 - bx0, height: by1 - by0, lines, imageBlocks });
   }
   return pages;
 }

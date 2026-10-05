@@ -15,10 +15,19 @@ export interface TextLine {
   y1: number;
 }
 
+export interface ImageBlock {
+  y0: number;
+  y1: number;
+  x0: number;
+  x1: number;
+}
+
 export interface PageLines {
   width: number;
   height: number;
   lines: TextLine[];
+  /** Ảnh được nhúng trong trang PDF, dùng để tính đủ vùng crop của câu. */
+  imageBlocks: ImageBlock[];
 }
 
 /** Đoạn dọc của 1 trang (đơn vị pt) thuộc về 1 câu hỏi. */
@@ -190,10 +199,30 @@ function findRepeatedAcrossPages(pages: PageLines[]): Set<string> {
   return repeated;
 }
 
+/** Ảnh lặp lại cùng vị trí giữa các trang thường là banner/header/footer, không phải hình
+ * minh họa của câu. Chỉ dùng toạ độ dọc để chịu được sai lệch nhỏ ở chiều ngang. */
+function findFurnitureImageBlocks(pages: PageLines[]): Set<string> {
+  const key = (block: ImageBlock) => `${Math.round(block.y0)}-${Math.round(block.y1)}`;
+  const pagesContainingBlock = new Map<string, Set<number>>();
+  pages.forEach((page, pageIndex) => {
+    for (const block of page.imageBlocks ?? []) {
+      const blockKey = key(block);
+      if (!pagesContainingBlock.has(blockKey)) pagesContainingBlock.set(blockKey, new Set());
+      pagesContainingBlock.get(blockKey)!.add(pageIndex);
+    }
+  });
+  const furniture = new Set<string>();
+  for (const [blockKey, pageSet] of pagesContainingBlock) {
+    if (pageSet.size >= 2) furniture.add(blockKey);
+  }
+  return furniture;
+}
+
 export function segmentFromLines(pages: PageLines[]): SegmentResult {
   if (pages.length === 0) return { ok: false, reason: "PDF không có trang nào" };
 
   const repeatedLines = findRepeatedAcrossPages(pages);
+  const furnitureImageBlocks = findFurnitureImageBlocks(pages);
 
   // Vùng nội dung từng trang (bỏ số trang + banner/header/footer lặp lại) + dòng đã sắp theo
   // thứ tự đọc.
@@ -202,10 +231,22 @@ export function segmentFromLines(pages: PageLines[]): SegmentResult {
       .map((l) => ({ ...l, text: l.text.normalize("NFC") }))
       .filter((l) => l.text.trim().length > 0 && !isFurniture(l, p.height) && !repeatedLines.has(l.text.trim()))
       .sort((a, b) => a.y0 - b.y0 || a.x0 - b.x0);
+    const contentImageBlocks = (p.imageBlocks ?? []).filter((block) => {
+      const key = `${Math.round(block.y0)}-${Math.round(block.y1)}`;
+      if (furnitureImageBlocks.has(key)) return false;
+      // A near full-page image is normally a scanned background, not a question figure.
+      return block.y1 - block.y0 <= p.height * 0.75;
+    });
+    const imageTop = contentImageBlocks.length ? Math.min(...contentImageBlocks.map((b) => b.y0)) : Infinity;
+    const imageBottom = contentImageBlocks.length ? Math.max(...contentImageBlocks.map((b) => b.y1)) : -Infinity;
+    const textTop = lines.length ? Math.min(...lines.map((l) => l.y0)) : Infinity;
+    const textBottom = lines.length ? Math.max(...lines.map((l) => l.y1)) : -Infinity;
+    const top = Math.min(textTop, imageTop);
+    const bottom = Math.max(textBottom, imageBottom);
     return {
       lines,
-      top: lines.length ? Math.min(...lines.map((l) => l.y0)) : 0,
-      bottom: lines.length ? Math.max(...lines.map((l) => l.y1)) : p.height,
+      top: top === Infinity ? 0 : top,
+      bottom: bottom === -Infinity ? p.height : bottom,
     };
   });
 

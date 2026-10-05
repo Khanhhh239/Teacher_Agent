@@ -14,7 +14,7 @@ export function RoomBankQuickCreate({ readyExams }: { readyExams: Exam[] }) {
   if (readyExams.length === 0) {
     return (
       <div className="card border-dashed p-4 text-sm text-slate-500">
-        Chưa có đề thi nào ở trạng thái "Sẵn sàng" để tạo phòng. Vào tab{" "}
+        Chưa có đề thi nào ở trạng thái &quot;Sẵn sàng&quot; để tạo phòng. Vào tab{" "}
         <span className="font-medium text-slate-700">Kho đề thi</span>, duyệt xong một đề rồi quay
         lại đây.
       </div>

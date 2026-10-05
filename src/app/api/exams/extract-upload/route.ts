@@ -23,7 +23,7 @@ function extOf(filename: string): string {
 
 export async function POST(request: Request) {
   const startedAt = Date.now();
-  const ANSWER_DEADLINE = startedAt + 235_000;
+  const ANSWER_DEADLINE = startedAt + 260_000;
   const supabase = await createClient();
   const {
     data: { user },
@@ -116,7 +116,9 @@ export async function POST(request: Request) {
   // Nếu PDF không có lớp chữ thật, tự động thử nhánh dự phòng (AI chỉ định vị toạ độ nhãn "Câu
   // N", không đọc nội dung — xem visionSegment.ts); chỉ báo lỗi nếu cả 2 nhánh đều thất bại.
   const warnings: string[] = [];
-  const EXAM_SEGMENT_DEADLINE = startedAt + 150_000;
+  // Cho nhánh PDF image-only đủ thời gian chạy 3 lượt voting/trang; vẫn nằm dưới
+  // maxDuration=280s và chừa 20s cuối cho dọn dẹp + trả response.
+  const EXAM_SEGMENT_DEADLINE = startedAt + 200_000;
   const imageResult = await buildImageQuestions(buffer, { warnings, deadline: EXAM_SEGMENT_DEADLINE });
   if (!imageResult.ok) {
     await cleanupTmp();
