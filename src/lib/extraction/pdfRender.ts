@@ -35,7 +35,7 @@ export async function removeRepeatedBanners(pagePngs: Buffer[]): Promise<Buffer[
     })
   );
 
-  type Band = { start: number; end: number; xStart: number; coverage: number };
+  type Band = { start: number; end: number; xStart: number; xEnd: number; coverage: number };
   const bandsByPage: Band[][] = decoded.map(({ data, width, height, channels }) => {
     const rows: number[] = [];
     // Một số PDF đặt banner ở khoảng 70-80% trang, không hẳn sát chân trang. Quét từ
@@ -65,6 +65,7 @@ export async function removeRepeatedBanners(pagePngs: Buffer[]): Promise<Buffer[
       .filter(([start, end]) => end - start >= Math.max(3, height * 0.006))
       .map(([start, end]) => {
         let xStart = width;
+        let xEnd = 0;
         let maxCoverage = 0;
         for (let y = start; y <= end; y++) {
           let rowBlue = 0;
@@ -75,16 +76,22 @@ export async function removeRepeatedBanners(pagePngs: Buffer[]): Promise<Buffer[
             const b = data[i + 2] ?? 0;
             if (b > 90 && b > r * 1.25 && b > g * 1.05) {
               xStart = Math.min(xStart, x);
+              xEnd = Math.max(xEnd, x);
               rowBlue++;
             }
           }
           maxCoverage = Math.max(maxCoverage, rowBlue / width);
         }
-        return { start: start / height, end: end / height, xStart: xStart / width, coverage: maxCoverage };
+        return { start: start / height, end: end / height, xStart: xStart / width, xEnd: xEnd / width, coverage: maxCoverage };
       });
   });
 
   const repeatedBands: Band[] = [];
+  // Dạng banner của các bộ đề thường là một dải xanh dài neo sát mép phải, có vài mảnh
+  // chéo ở đầu. Dạng này có thể bị đặt ở các y khác nhau nên không thể chỉ dựa vào việc
+  // lặp cùng tọa độ giữa các trang.
+  const isRightEdgeBanner = (band: Band) =>
+    band.xStart >= 0.35 && band.xEnd >= 0.96 && band.coverage >= 0.08 && band.end - band.start <= 0.12;
   const resemblesSameBanner = (a: Band, b: Band) => {
     const overlap = Math.max(0, Math.min(a.end, b.end) - Math.max(a.start, b.start));
     const union = Math.max(a.end, b.end) - Math.min(a.start, b.start);
@@ -102,7 +109,7 @@ export async function removeRepeatedBanners(pagePngs: Buffer[]): Promise<Buffer[
         count + (pageBands.some((other) => resemblesSameBanner(other, band)) ? 1 : 0),
       0
     );
-    if (appearances >= 2 && !repeatedBands.some((other) => resemblesSameBanner(other, band))) {
+    if ((appearances >= 2 || isRightEdgeBanner(band)) && !repeatedBands.some((other) => resemblesSameBanner(other, band))) {
       repeatedBands.push(band);
     }
   }
@@ -111,7 +118,7 @@ export async function removeRepeatedBanners(pagePngs: Buffer[]): Promise<Buffer[
   return Promise.all(
     decoded.map(async ({ png, width, height }, pageIndex) => {
       const masks = bandsByPage[pageIndex]
-        .filter((band) => repeatedBands.some((other) => resemblesSameBanner(other, band)))
+        .filter((band) => repeatedBands.some((other) => resemblesSameBanner(other, band) || isRightEdgeBanner(band)))
         .map((band) => {
           const top = Math.max(0, Math.floor(band.start * height) - 5);
           const bottom = Math.min(height, Math.ceil(band.end * height) + 6);
