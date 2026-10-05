@@ -132,12 +132,13 @@ export async function buildImageQuestions(
           const width = Math.round(cutX * scale);
           return `<rect x="0" y="${top}" width="${width}" height="${height}" fill="white"/>`;
         }
-        // AI chỉ cần tẩy cụm "Câu N." ở vị trí bbox.x0. Giới hạn 52pt bảo vệ ký tự đầu
-        // của nội dung ngay cả khi bbox.x1 bị model kéo dài sang cả dòng câu hỏi.
+        // Nhánh ảnh dùng bbox đo trên lưới 20/1000. Không dùng vùng cố định rộng (trước đây
+        // là 52pt), vì vùng đó đã ăn mất chữ đầu câu trong de1. Chỉ chừa đệm 0.8pt quanh
+        // đúng bbox nhãn; nếu model khoanh rộng thì bbox được giới hạn theo độ rộng nhãn hợp lý.
         const labelX0 = Math.max(0, b.labelLine.x0);
-        const labelX1 = Math.min(Math.max(cutX, labelX0 + 28), labelX0 + 52);
-        const left = Math.max(0, Math.round((labelX0 - 2) * scale));
-        const right = Math.round(labelX1 * scale);
+        const labelX1 = Math.min(Math.max(cutX, labelX0 + 10), labelX0 + 46);
+        const left = Math.max(0, Math.round((labelX0 - 0.8) * scale));
+        const right = Math.round((labelX1 + 0.8) * scale);
         return `<rect x="${left}" y="${top}" width="${Math.max(1, right - left)}" height="${height}" fill="white"/>`;
       })
       .filter((x): x is string => x !== null);

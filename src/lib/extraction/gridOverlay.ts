@@ -63,14 +63,15 @@ export interface GridOverlayResult {
  */
 export async function buildGridOverlay(
   image: Buffer,
-  opts: { step?: number; lineAlpha?: number } = {}
+  opts: { step?: number; labelEvery?: number; lineAlpha?: number } = {}
 ): Promise<GridOverlayResult> {
   const sharp = (await import("sharp")).default;
   const meta = await sharp(image).metadata();
   const W = meta.width ?? 0;
   const H = meta.height ?? 0;
   const gutter = Math.max(70, Math.round(Math.max(W, H) * 0.045));
-  const step = opts.step ?? 100; // vẽ lưới mỗi 100 đơn vị trong thang 0-1000
+  const step = opts.step ?? 20; // vạch nhỏ nhất 20/1000; dùng 2pt ở vùng cỡ trang A4
+  const labelEvery = opts.labelEvery ?? 100; // chỉ ghi số lớn mỗi 100/1000 để tránh rối ảnh
   const lineAlpha = opts.lineAlpha ?? 0.3;
 
   const canvasW = W + gutter * 2;
@@ -86,12 +87,14 @@ export async function buildGridOverlay(
     lines += `<line x1="${x}" y1="${gutter}" x2="${x}" y2="${gutter + H}" stroke="red" stroke-width="1" stroke-opacity="${lineAlpha}"/>`;
     lines += `<line x1="${gutter}" y1="${y}" x2="${gutter + W}" y2="${y}" stroke="red" stroke-width="1" stroke-opacity="${lineAlpha}"/>`;
     // Vạch số: chỉ nằm trong lề, không bao giờ lấn vào vùng nội dung.
-    const label = String(v);
-    const labelW = label.length * (3 * px + px) - px;
-    labels += digitRects(label, Math.round(x - labelW / 2), Math.round(gutter - px * 7), px, "#b00000");
-    labels += digitRects(label, Math.round(x - labelW / 2), Math.round(gutter + H + px * 2), px, "#b00000");
-    labels += digitRects(label, Math.round(gutter - px * 3 - labelW), Math.round(y - px * 2.5), px, "#b00000");
-    labels += digitRects(label, Math.round(gutter + W + px * 3), Math.round(y - px * 2.5), px, "#b00000");
+    if (v % labelEvery === 0 || v === 1000) {
+      const label = String(v);
+      const labelW = label.length * (3 * px + px) - px;
+      labels += digitRects(label, Math.round(x - labelW / 2), Math.round(gutter - px * 7), px, "#b00000");
+      labels += digitRects(label, Math.round(x - labelW / 2), Math.round(gutter + H + px * 2), px, "#b00000");
+      labels += digitRects(label, Math.round(gutter - px * 3 - labelW), Math.round(y - px * 2.5), px, "#b00000");
+      labels += digitRects(label, Math.round(gutter + W + px * 3), Math.round(y - px * 2.5), px, "#b00000");
+    }
   }
 
   const overlaySvg = `<svg width="${canvasW}" height="${canvasH}" xmlns="http://www.w3.org/2000/svg">

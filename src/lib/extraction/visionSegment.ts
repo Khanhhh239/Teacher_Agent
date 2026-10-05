@@ -11,6 +11,7 @@
  */
 import { callGeminiWithImage, extractJson } from "./llmClient";
 import { buildBlocksFromBoundaries, type Boundary, type SegmentResult, type TextLine } from "./textLayerSegment";
+import { buildGridOverlay } from "./gridOverlay";
 
 const VISION_LABEL_MODEL = "gemini-3.5-flash-lite";
 
@@ -18,7 +19,12 @@ const VISION_LABEL_MODEL = "gemini-3.5-flash-lite";
 // đơn giản (1 cột), model vẫn có lúc đọc nhầm chữ số trên nhãn (vd lẫn "Câu 3" ra sau "Câu 6"),
 // làm hỏng cả bước kiểm tra liên tục. Số thứ tự thật được TỰ ĐÁNH bằng code theo đúng thứ tự
 // toạ độ (trên→dưới, trái→phải) sau khi định vị xong — loại bỏ hoàn toàn rủi ro đọc sai số.
-const LABEL_DETECT_PROMPT = `Ảnh đính kèm là 1 TRANG đề thi. Nhiệm vụ DUY NHẤT: tìm VỊ TRÍ (toạ độ) của:
+const LABEL_DETECT_PROMPT = `Ảnh đính kèm là 1 TRANG đề thi có một lớp LƯỚI TOẠ ĐỘ màu đỏ phủ lên ảnh.
+Phần lề trắng bên ngoài ảnh chỉ chứa số của lưới; KHÔNG được coi số/lưới ở lề là nội dung đề.
+Các vạch nhỏ cách nhau 20 đơn vị trên thang 0-1000; số lớn được ghi mỗi 100 đơn vị.
+Toạ độ phải đo trên VÙNG ẢNH ĐỀ GỐC bên trong khung đỏ, không tính phần lề trắng.
+
+Nhiệm vụ DUY NHẤT: tìm VỊ TRÍ (toạ độ) của:
 1. Mỗi nhãn MỞ ĐẦU một câu hỏi mới, dạng "Câu <số>." hoặc "Câu <số>:" hoặc "Câu <số>)" — nhãn này luôn nằm sát lề trái, ở đầu dòng. KHÔNG tính chữ "câu" xuất hiện giữa câu văn (vd "mỗi câu hỏi", "các câu sau").
 2. Mỗi tiêu đề phần thi, dạng "PHẦN <số La Mã>..." (vd "PHẦN I. Câu trắc nghiệm...").
 
@@ -31,7 +37,8 @@ Trả về DUY NHẤT 1 JSON, không markdown, không code fence, theo schema:
     {"kind": "part", "box_2d": [300, 30, 328, 420]}
   ]
 }
-"box_2d" là [ymin, xmin, ymax, xmax] CHUẨN HÓA theo thang 0-1000 so với kích thước ảnh (quy ước chuẩn). Sắp xếp các phần tử theo đúng thứ tự xuất hiện trên trang, từ trên xuống dưới. Nếu trang không có nhãn nào, trả {"labels": []}.`;
+"box_2d" là [ymin, xmin, ymax, xmax] CHUẨN HÓA theo thang 0-1000 của VÙNG ẢNH ĐỀ GỐC. Hãy khoanh SÁT chữ nhãn, không lấy ký tự đầu của nội dung ngay sau nhãn. Sai số mục tiêu không quá một vạch nhỏ (20/1000); nếu lưới cắt qua chữ, lấy mép chữ thực tế chứ không lấy theo vạch.
+Sắp xếp các phần tử theo đúng thứ tự xuất hiện trên trang, từ trên xuống dưới. Nếu trang không có nhãn nào, trả {"labels": []}.`;
 
 interface RawVisionLabel {
   kind: "q" | "part";
@@ -137,8 +144,11 @@ export async function segmentFromVisionLabels(
   const detectionAttempts = DEFAULT_DETECTION_ATTEMPTS;
   // Gọi AI 3 lượt độc lập mỗi trang rồi biểu quyết theo vị trí. Deadline của route vẫn chặn
   // việc chờ vô hạn, nhưng không hạ chất lượng định vị khi người dùng chấp nhận chờ lâu hơn.
+  // AI nhìn bản sao có lưới chi tiết 20/1000 (xấp xỉ 2pt trên trang A4), còn mọi crop
+  // và mọi thao tác xoá nhãn phía sau vẫn thực hiện trên ảnh gốc không có lưới.
+  const gridPages = await Promise.all(pageImages.map((img) => buildGridOverlay(img, { step: 20, labelEvery: 100 })));
   const perPageLabels = await Promise.all(
-    pageImages.map((img) => detectPageLabelsByVoting(img, warnings, deadline, detectionAttempts))
+    gridPages.map((grid) => detectPageLabelsByVoting(grid.png, warnings, deadline, detectionAttempts))
   );
 
   const boundaries: Boundary[] = [];
