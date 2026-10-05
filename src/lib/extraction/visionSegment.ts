@@ -25,7 +25,6 @@ hình minh họa hoặc câu hỏi nằm sát nhau.
 Nhiệm vụ DUY NHẤT: tìm VỊ TRÍ (toạ độ) của:
 1. Mỗi nhãn MỞ ĐẦU một câu hỏi mới, dạng "Câu <số>." hoặc "Câu <số>:" hoặc "Câu <số>)" — nhãn này luôn nằm sát lề trái, ở đầu dòng. KHÔNG tính chữ "câu" xuất hiện giữa câu văn (vd "mỗi câu hỏi", "các câu sau").
 2. Mỗi tiêu đề phần thi, dạng "PHẦN <số La Mã>..." (vd "PHẦN I. Câu trắc nghiệm...").
-3. Dòng chân trang lặp lại dạng "Trang .../... - Mã đề ..." nếu có; trả kind "footer".
 
 TUYỆT ĐỐI KHÔNG đọc, không chép lại, không diễn giải nội dung câu hỏi, KHÔNG CẦN đọc số thứ tự ghi trên nhãn — chỉ cần xác định toạ độ của riêng cụm nhãn đó (vd chỉ khoanh đúng "Câu 5:" chứ không khoanh cả câu hỏi phía sau).
 
@@ -33,15 +32,14 @@ Trả về DUY NHẤT 1 JSON, không markdown, không code fence, theo schema:
 {
   "labels": [
     {"kind": "q", "box_2d": [120, 40, 145, 95]},
-    {"kind": "part", "box_2d": [300, 30, 328, 420]},
-    {"kind": "footer", "box_2d": [760, 600, 780, 950]}
+    {"kind": "part", "box_2d": [300, 30, 328, 420]}
   ]
 }
 "box_2d" là [ymin, xmin, ymax, xmax] CHUẨN HÓA theo thang 0-1000 của ảnh gốc. Hãy khoanh SÁT chữ nhãn, không lấy ký tự đầu của nội dung ngay sau nhãn.
 Sắp xếp các phần tử theo đúng thứ tự xuất hiện trên trang, từ trên xuống dưới. Nếu trang không có nhãn nào, trả {"labels": []}.`;
 
 interface RawVisionLabel {
-  kind: "q" | "part" | "footer";
+  kind: "q" | "part";
   box_2d: [number, number, number, number];
 }
 
@@ -83,7 +81,7 @@ async function detectPageLabelsByVoting(
     Array.from({ length: detectionAttempts }, () => detectPageLabels(pageImage, warnings, deadline))
   );
 
-  function clusterAndVote(kind: "q" | "part" | "footer"): [number, number, number, number][] {
+  function clusterAndVote(kind: "q" | "part"): [number, number, number, number][] {
     const candidates: { runIdx: number; box: [number, number, number, number] }[] = [];
     attempts.forEach((labels, runIdx) => {
       for (const l of labels) {
@@ -125,8 +123,7 @@ async function detectPageLabelsByVoting(
 
   const qBoxes = clusterAndVote("q").map((box): RawVisionLabel => ({ kind: "q", box_2d: box }));
   const partBoxes = clusterAndVote("part").map((box): RawVisionLabel => ({ kind: "part", box_2d: box }));
-  const footerBoxes = clusterAndVote("footer").map((box): RawVisionLabel => ({ kind: "footer", box_2d: box }));
-  return [...qBoxes, ...partBoxes, ...footerBoxes].sort((a, b) => a.box_2d[0] - b.box_2d[0]);
+  return [...qBoxes, ...partBoxes].sort((a, b) => a.box_2d[0] - b.box_2d[0]);
 }
 
 /**
@@ -150,7 +147,6 @@ export async function segmentFromVisionLabels(
   );
 
   const boundaries: Boundary[] = [];
-  const furnitureBoxes: { page: number; x0: number; y0: number; x1: number; y1: number }[] = [];
   perPageLabels.forEach((labels, pageIndex) => {
     const { width, height } = pageSizesPt[pageIndex];
     for (const l of labels) {
@@ -166,8 +162,6 @@ export async function segmentFromVisionLabels(
         boundaries.push({ kind: "q", page: pageIndex, y0, number: 0, text: "", line, matchLength: 0, labelBoxX1: x1 });
       } else if (l.kind === "part") {
         boundaries.push({ kind: "part", page: pageIndex, y0, number: 0, text: "", line, matchLength: 0 });
-      } else if (l.kind === "footer") {
-        furnitureBoxes.push({ page: pageIndex, x0, y0, x1, y1 });
       }
     }
   });
@@ -207,5 +201,5 @@ export async function segmentFromVisionLabels(
   const built = buildBlocksFromBoundaries(boundaries, pageSizesPt, contentBounds);
   if (!built.ok) return built;
 
-  return { ok: true, title: "", blocks: built.blocks, furnitureBoxes };
+  return { ok: true, title: "", blocks: built.blocks };
 }

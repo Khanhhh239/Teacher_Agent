@@ -122,15 +122,6 @@ export async function buildImageQuestions(
       cleanPagePngs.push(rawPagePngs[p]);
       continue;
     }
-    const furnitureRects = ("furnitureBoxes" in seg ? (seg.furnitureBoxes ?? []) : [])
-      .filter((box) => box.page === p)
-      .map((box) => {
-        const left = Math.max(0, Math.round(box.x0 * scale));
-        const top = Math.max(0, Math.round(box.y0 * scale) - 2);
-        const right = Math.round(box.x1 * scale);
-        const bottom = Math.round(box.y1 * scale) + 2;
-        return `<rect x="${left}" y="${top}" width="${Math.max(1, right - left)}" height="${Math.max(1, bottom - top)}" fill="white"/>`;
-      });
     const rects = blocksOnPage
       .map((b) => {
         const cutX = findLabelCutoffX(pageChars[p] ?? [], b.labelLine, b.labelLength) ?? b.labelBoxX1 ?? null;
@@ -152,14 +143,13 @@ export async function buildImageQuestions(
         return `<rect x="${left}" y="${top}" width="${Math.max(1, right - left)}" height="${height}" fill="white"/>`;
       })
       .filter((x): x is string => x !== null);
-    const allRects = [...furnitureRects, ...rects];
-    if (allRects.length === 0) {
+    if (rects.length === 0) {
       cleanPagePngs.push(rawPagePngs[p]);
       continue;
     }
     const meta = await sharp(rawPagePngs[p]).metadata();
     const patched = await sharp(rawPagePngs[p])
-      .composite([{ input: Buffer.from(`<svg width="${meta.width}" height="${meta.height}">${allRects.join("")}</svg>`), left: 0, top: 0 }])
+      .composite([{ input: Buffer.from(`<svg width="${meta.width}" height="${meta.height}">${rects.join("")}</svg>`), left: 0, top: 0 }])
       .png()
       .toBuffer();
     cleanPagePngs.push(patched);
